@@ -27,13 +27,8 @@
 
         <div class="field">
           <label>Time Signature</label>
-          <select id="time-sig">
-            <option value="4/4" selected>4/4</option>
-            <option value="3/4">3/4</option>
-            <option value="2/4">2/4</option>
-            <option value="6/8">6/8</option>
-            <option value="2/2">2/2 (cut)</option>
-          </select>
+          <div class="derived-value" id="time-sig-display">—</div>
+          <span class="derived-note">from M: in ABC</span>
         </div>
 
         <div class="field">
@@ -47,8 +42,10 @@
         </div>
 
         <div class="field" style="grid-column: 1 / -1">
-          <label>Tempo — <span id="bpm-label">100</span> BPM</label>
-          <input type="range" id="bpm-slider" min="40" max="240" value="100" step="1">
+          <label>Tempo — <span id="bpm-label">—</span> BPM
+            <span class="derived-note" id="bpm-source"></span>
+          </label>
+          <input type="range" id="bpm-slider" min="40" max="240" value="100" step="1" disabled>
         </div>
 
         <div class="field">

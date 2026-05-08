@@ -33,17 +33,18 @@ const app = {
 const $ = id => document.getElementById(id);
 let elInputAbc, elOutputAbc, elNoteStrip, elTapBtn, elTransportStatus,
     elStartBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
-    elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel,
-    elTimeSig, elResolution, elCountIn, elSubdivision;
+    elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel, elBpmSource,
+    elTimeSigDisplay, elResolution, elCountIn, elSubdivision;
 
 // ---------------------------------------------------------------------------
 // Settings helpers
 // ---------------------------------------------------------------------------
 function getSettings() {
   return {
-    timeSig:     elTimeSig.value,           // '4/4'
+    // timeSig and bpm are derived from parsed ABC, not from dropdowns
+    timeSig:     state.timeSignature || '4/4',
     bpm:         parseInt(elBpmSlider.value, 10),
-    resolution:  elResolution.value,        // 'eighth' etc.
+    resolution:  elResolution.value,
     countIn:     parseInt(elCountIn.value, 10),
     subdivision: parseInt(elSubdivision.value, 10),
   };
@@ -169,17 +170,21 @@ function loadABC() {
     return;
   }
 
-  // Sync time signature from ABC if present
-  if (state.timeSignature) {
-    elTimeSig.value = state.timeSignature;
-  }
+  // Populate derived settings from parsed ABC
+  const timeSig = state.timeSignature || '4/4';
+  elTimeSigDisplay.textContent = timeSig;
+
   if (state.tempo) {
     elBpmSlider.value = state.tempo;
     elBpmLabel.textContent = state.tempo;
+    elBpmSource.textContent = '(from Q:)';
+  } else {
+    elBpmLabel.textContent = elBpmSlider.value;
+    elBpmSource.textContent = '(override)';
   }
+  elBpmSlider.disabled = false;
 
-  const s = getSettings();
-  buildBeatDots(parseTimeSig(s.timeSig));
+  buildBeatDots(parseTimeSig(timeSig));
 
   app.phase = 'loaded';
   renderNoteStrip();
@@ -421,7 +426,8 @@ document.addEventListener('DOMContentLoaded', () => {
   elBeatDisplay    = $('beat-display');
   elBpmSlider      = $('bpm-slider');
   elBpmLabel       = $('bpm-label');
-  elTimeSig        = $('time-sig');
+  elBpmSource      = $('bpm-source');
+  elTimeSigDisplay = $('time-sig-display');
   elResolution     = $('resolution');
   elCountIn        = $('count-in');
   elSubdivision    = $('subdivision');
@@ -439,9 +445,10 @@ document.addEventListener('DOMContentLoaded', () => {
     elBpmLabel.textContent = elBpmSlider.value;
   });
 
-  // Time sig change → rebuild beat dots
-  elTimeSig.addEventListener('change', () => {
-    buildBeatDots(parseTimeSig(elTimeSig.value));
+  // BPM slider → clear the Q: attribution once user overrides
+  elBpmSlider.addEventListener('input', () => {
+    elBpmLabel.textContent = elBpmSlider.value;
+    elBpmSource.textContent = '(override)';
   });
 
   // Buttons

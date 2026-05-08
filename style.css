@@ -88,6 +88,18 @@ header p  { font-size: 0.8rem; color: var(--muted); }
   width: 100%;
 }
 .field select:focus, .field input:focus { outline: 1px solid var(--accent); }
+.derived-value {
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--accent-hi);
+  padding: 0.3rem 0;
+}
+.derived-note {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-style: italic;
+}
 .field .value-label { font-size: 0.72rem; color: var(--accent-hi); text-align: right; }
 
 /* ── ABC Input ── */
