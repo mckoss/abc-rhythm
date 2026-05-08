@@ -2,7 +2,7 @@
  * quantize.js — Beat-grid quantization engine for abc-rhythm
  *
  * Converts tap timestamps into ABC notation duration strings.
- * Exported via window.Quantize = { quantizeTaps, buildGrid, beatsToABC }
+ * Exported via window.Quantize = { quantizeTaps, buildGrid, beatsToABC, parseTimeSig }
  *
  * All durations are relative to ABC unit length L:1/4 (quarter note = 1 beat).
  */
@@ -39,6 +39,26 @@
     { beats: 0.25,  abc: '/4'  },   // sixteenth note
     { beats: 0.125, abc: '/8'  },   // thirty-second note
   ];
+
+  // ---------------------------------------------------------------------------
+  // parseTimeSig
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Parse a time signature value string into the number of beats per measure.
+   *
+   * @param {string} value - e.g. '4/4', '3/4', '6/8', 'C', 'C|'
+   * @returns {number} beats per measure (numerator of the time sig)
+   */
+  function parseTimeSig(value) {
+    if (!value) return 4;
+    const s = value.trim();
+    if (s === 'C')  return 4;
+    if (s === 'C|') return 2;
+    const m = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (m) return parseInt(m[1], 10);
+    return 4; // fallback
+  }
 
   // ---------------------------------------------------------------------------
   // buildGrid
@@ -127,14 +147,19 @@
    * @param {string}  config.resolution      - grid resolution
    * @param {number}  [config.startTime]     - ms timestamp of the first beat;
    *                                           defaults to tapTimes[0]
-   * @returns {string[]} ABC duration strings, one per inter-tap interval
+   * @param {Array}   [config.fieldChanges]   - optional array from MusicState.fieldChanges
+   *                                           [ { noteIndex, field, value }, ... ]
+   *                                           Only M: changes affect the beat grid.
+   * @returns {string[]} ABC duration strings, one per inter-tap interval.
+   *                     The returned array also has a `.segments` property:
+   *                     [ { fromNoteIndex, beatsPerMeasure }, ... ]
    */
   function quantizeTaps(tapTimes, config) {
     // Edge cases
     if (!tapTimes || tapTimes.length < 2) return [];
     if (!config.bpm || config.bpm <= 0)   return [];
 
-    const { bpm, resolution = 'eighth' } = config;
+    const { bpm, resolution = 'eighth', fieldChanges } = config;
     const startTime = (config.startTime != null) ? config.startTime : tapTimes[0];
 
     const multiplier   = RESOLUTION_MULTIPLIER[resolution] || 2;
@@ -143,10 +168,53 @@
 
     if (gridInterval <= 0) return [];
 
+    // ------------------------------------------------------------------
+    // Build segments list from M: fieldChanges
+    // ------------------------------------------------------------------
+    // Segment 0 always starts at note index 0 with config.beatsPerMeasure.
+    const segments = [
+      { fromNoteIndex: 0, beatsPerMeasure: config.beatsPerMeasure || 4 },
+    ];
+
+    if (Array.isArray(fieldChanges)) {
+      for (const { noteIndex, field, value } of fieldChanges) {
+        if (field === 'M') {
+          segments.push({ fromNoteIndex: noteIndex, beatsPerMeasure: parseTimeSig(value) });
+        }
+        // K:, L:, Q: etc. are ignored here
+      }
+      // Keep segments sorted by noteIndex so lookup is straightforward
+      segments.sort((a, b) => a.fromNoteIndex - b.fromNoteIndex);
+    }
+
+    /**
+     * Return the beatsPerMeasure that applies at a given note index.
+     * Walks segments in reverse to find the last segment whose fromNoteIndex
+     * is ≤ noteIndex.
+     */
+    function beatsPerMeasureAt(noteIndex) {
+      let result = segments[0].beatsPerMeasure;
+      for (const seg of segments) {
+        if (seg.fromNoteIndex <= noteIndex) {
+          result = seg.beatsPerMeasure;
+        } else {
+          break;
+        }
+      }
+      return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Quantize each inter-tap interval
+    // ------------------------------------------------------------------
     const durations = [];
 
     for (let i = 0; i < tapTimes.length - 1; i++) {
       const intervalMs = tapTimes[i + 1] - tapTimes[i];
+
+      // beatsPerMeasureAt is available for future measure-alignment logic;
+      // current quantization is beat-independent of measure structure.
+      void beatsPerMeasureAt(i);
 
       if (intervalMs <= 0) {
         // Zero or negative interval — treat as shortest unit
@@ -164,6 +232,9 @@
       durations.push(beatsToABC(beats));
     }
 
+    // Attach segment list for inspection / future use
+    durations.segments = segments;
+
     return durations;
   }
 
@@ -171,6 +242,6 @@
   // Export
   // ---------------------------------------------------------------------------
 
-  global.Quantize = { quantizeTaps, buildGrid, beatsToABC };
+  global.Quantize = { quantizeTaps, buildGrid, beatsToABC, parseTimeSig };
 
 })(typeof window !== 'undefined' ? window : global);
