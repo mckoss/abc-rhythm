@@ -14,17 +14,19 @@
 let state;       // MusicState — reactive IR
 let clickTrack;  // ClickTrack
 let renderer;    // ScoreRenderer
+let notePlayer;  // NotePlayer
 
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
 const app = {
   phase: 'idle',          // idle | loaded | countdown | recording | reviewing
-  tapTimes: [],           // raw tap timestamps (ms)
-  countInBeatsLeft: 0,    // beats remaining in count-in
-  recordingStartTime: 0,  // ms timestamp when recording began (first beat after count-in)
-  currentNoteIdx: 0,      // which note chip is "active" (tracks beats during recording)
-  beatIdx: 0,             // current beat within measure (for beat-dot display)
+  holds: [],              // { down, up } ms pairs — one per note
+  noteDown: null,         // timestamp of current keydown (null when key is up)
+  countInBeatsLeft: 0,
+  recordingStartTime: 0,
+  currentNoteIdx: 0,
+  beatIdx: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -244,7 +246,9 @@ function startSession() {
 
 function stopSession() {
   clickTrack.stop();
-  app.phase = app.tapTimes.length > 0 ? 'reviewing' : 'loaded';
+  notePlayer.stopAll();
+  app.noteDown = null;
+  app.phase = app.holds.length > 0 ? 'reviewing' : 'loaded';
   elStopBtn.disabled = true;
   elStartBtn.disabled = false;
   elRedoBtn.disabled = false;
@@ -253,7 +257,7 @@ function stopSession() {
   elTapBtn.textContent = 'SPACEBAR  /  TAP';
   document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
 
-  if (app.tapTimes.length >= 2) {
+  if (app.holds.length >= 1) {
     finalizeQuantization();
     setStatus('Done — score updated. Redo to re-record.', 'ready');
   } else {
@@ -265,7 +269,8 @@ function stopSession() {
 function redoSession() {
   state.clearDurations();
   app.phase = 'loaded';
-  app.tapTimes = [];
+  app.holds = [];
+  app.noteDown = null;
   app.currentNoteIdx = 0;
   elRedoBtn.disabled = true;
   elTapBtn.disabled = true;
@@ -303,56 +308,81 @@ function onTick({ beat, subdiv, isMeasureStart, isBeatStart }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tap handler
 // ---------------------------------------------------------------------------
-function recordTap() {
+// Keydown / keyup hold handlers
+// ---------------------------------------------------------------------------
+function onNoteKeyDown() {
   if (app.phase !== 'recording') return;
+  if (app.noteDown !== null) return; // already held (ignore repeat)
+  if (app.currentNoteIdx >= state.noteCount) return;
 
-  const now = Date.now();
-  app.tapTimes.push(now);
+  app.noteDown = Date.now();
 
-  const tapNum = app.tapTimes.length; // 1-based
-
-  // Live quantization: re-quantize after every tap (need at least 2 taps = 1 interval)
-  if (app.tapTimes.length >= 2) {
-    liveQuantize();
+  // Play the note — sustain until keyup
+  const note = state.notes[app.currentNoteIdx];
+  if (note && note.type === 'note') {
+    notePlayer.startNote(note.pitch, note.accidental || '', note.octave || '');
   }
 
-  // Advance the active note chip
-  app.currentNoteIdx = tapNum - 1; // tap N starts note N-1, ends note N-2
+  // Visual
+  advanceActiveChip(app.currentNoteIdx);
+  const remaining = state.noteCount - app.currentNoteIdx;
+  elTapBtn.textContent = `HOLD — Note ${app.currentNoteIdx + 1} of ${state.noteCount}`;
+  setStatus(`Holding note ${app.currentNoteIdx + 1} — release to advance.`, 'recording');
+}
 
-  if (tapNum <= state.noteCount) {
-    advanceActiveChip(tapNum - 1);
-  }
+function onNoteKeyUp() {
+  if (app.phase !== 'recording') return;
+  if (app.noteDown === null) return;
 
-  if (tapNum > state.noteCount) {
-    // Extra tap = end of last note → finalize and stop
+  const up = Date.now();
+  const down = app.noteDown;
+  app.noteDown = null;
+
+  // Stop the sustained note
+  notePlayer.stopCurrentNote();
+
+  // Record the hold
+  app.holds.push({ down, up });
+  app.currentNoteIdx++;
+
+  // Live quantize after each completed hold
+  liveQuantize();
+
+  if (app.currentNoteIdx >= state.noteCount) {
     finalizeQuantization();
     stopSession();
     return;
   }
 
-  const remaining = state.noteCount - tapNum + 1;
-  elTapBtn.textContent = remaining > 0
-    ? `TAP — Note ${tapNum + 1} of ${state.noteCount}`
-    : 'TAP — Final tap to close last note';
+  const remaining = state.noteCount - app.currentNoteIdx;
+  elTapBtn.textContent = `TAP — Note ${app.currentNoteIdx + 1} of ${state.noteCount}`;
+  setStatus(`${remaining} note${remaining !== 1 ? 's' : ''} remaining.`, 'recording');
+}
 
-  setStatus(`${remaining} note${remaining !== 1 ? 's' : ''} left, then one final tap.`, 'recording');
+// Legacy single-tap fallback (tap button click)
+function recordTap() {
+  if (app.noteDown === null) {
+    onNoteKeyDown();
+  } else {
+    onNoteKeyUp();
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Quantization
 // ---------------------------------------------------------------------------
 function liveQuantize() {
+  if (app.holds.length === 0) return;
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
-  const durations = Quantize.quantizeTaps(app.tapTimes, {
-    bpm,
-    beatsPerMeasure: parseTimeSig(s.timeSig),
-    resolution: s.resolution,
-    startTime: app.recordingStartTime || app.tapTimes[0],
+  // Build tap times from hold starts for grid alignment,
+  // but use hold durations for note length quantization.
+  const holdDurations = app.holds.map(h => h.up - h.down);
+  const durations = holdDurations.map(ms => {
+    const beats = ms / (60000 / bpm);
+    return Quantize.beatsToABC(beats);
   });
-  // Apply to state — triggers reactive re-render via subscriber
   state.setAllDurations(durations);
 }
 
@@ -436,6 +466,7 @@ document.addEventListener('DOMContentLoaded', () => {
   state      = new MusicState();
   clickTrack = new ClickTrack();
   renderer   = new ScoreRenderer('score-container');
+  notePlayer = new NotePlayer();
 
   // Reactive: any state change → re-render score + update UI
   state.subscribe(onStateChange);

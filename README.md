@@ -157,15 +157,20 @@ All three are **retained verbatim** and passed through to abcjs (which does hand
 - [x] Click track with emphasized downbeat (Web Audio API)
 - [x] Configurable resolution (quarter / eighth / sixteenth / 32nd)
 - [x] Count-in measures before recording
-- [x] Beat-grid quantization (not just median-interval)
-- [ ] Re-quantize live when resolution/BPM settings change (tap data already stored)
-- [ ] MIDI playback of annotated result via abcjs
-- [ ] Undo last tap
-- [ ] Transpose UI (concert pitch ↔ Bb/Eb instrument)
-- [ ] Mobile touch support (tap anywhere on screen)
-- [ ] Save/load ABC files from local filesystem
-- [ ] Tied-note merging in quantizer
-- [ ] Multi-tune file support (X:2, X:3, …)
+- [x] Beat-grid quantization
+- [x] Mid-tune key/meter changes (`field-change` tokens in IR)
+- [x] Sine-wave note playback on keydown, release on keyup — hold duration = note duration
+- [ ] [#1](https://github.com/mckoss/abc-rhythm/issues/1) Play button: play back current quantized score
+- [ ] [#2](https://github.com/mckoss/abc-rhythm/issues/2) Real-time note audio during recording (keydown/keyup)
+- [ ] [#3](https://github.com/mckoss/abc-rhythm/issues/3) Hold-duration quantization mode
+- [ ] [#4](https://github.com/mckoss/abc-rhythm/issues/4) Live re-quantize when BPM/resolution settings change
+- [ ] [#5](https://github.com/mckoss/abc-rhythm/issues/5) MIDI playback via abcjs
+- [ ] [#6](https://github.com/mckoss/abc-rhythm/issues/6) Undo last tap/hold
+- [ ] [#7](https://github.com/mckoss/abc-rhythm/issues/7) Transpose UI (concert pitch ↔ Bb/Eb instrument)
+- [ ] [#8](https://github.com/mckoss/abc-rhythm/issues/8) Mobile touch support
+- [ ] [#9](https://github.com/mckoss/abc-rhythm/issues/9) Save/load ABC files from local filesystem
+- [ ] [#10](https://github.com/mckoss/abc-rhythm/issues/10) Tied-note merging in quantizer
+- [ ] [#11](https://github.com/mckoss/abc-rhythm/issues/11) Multi-tune file support
 
 ---
 
