@@ -33,15 +33,18 @@
   const REST_RE = /z(\d*\/?(?:\d+)?)/g;
 
   /**
-   * Combined scanner that finds notes AND rests in document order.
-   * We need lastIndex sync, so we use a single pass with alternation.
+   * Combined scanner that finds notes, rests, and inline field changes in
+   * document order.
    *   Group 1: accidental  (note only)
    *   Group 2: pitch       (note only)
    *   Group 3: octave      (note only)
    *   Group 4: duration    (note)
-   *   Group 5: rest duration (rest path, matched when group 2 is absent)
+   *   Group 5: 'z'         (rest path)
+   *   Group 6: rest duration
+   *   Group 7: field letter (inline field change, e.g. K, M, L, Q)
+   *   Group 8: field value  (inline field change)
    */
-  const BODY_TOKEN_RE = /(\^{1,2}|_{1,2}|=)?([A-Ga-g])([,']*)(\d*\/?(?:\d+)?)|(z)(\d*\/?(?:\d+)?)/g;
+  const BODY_TOKEN_RE = /(\^{1,2}|_{1,2}|=)?([A-Ga-g])([,']*)(\d*\/?(?:\d+)?)|(z)(\d*\/?(?:\d+)?)|\[([A-Za-z]):(.*?)\]/g;
 
   // ---------------------------------------------------------------------------
   // Header parsing helpers
@@ -88,11 +91,13 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Body parser — returns array of text/note/rest tokens for one body string.
-  // noteIndex is the starting index for note/rest tokens.
+  // Body segment parser — parses a single body line (not a field-change line)
+  // for notes, rests, and inline field changes.
+  // Returns { tokens, noteIndex } where noteIndex is updated past any note/rest
+  // tokens produced.
   // ---------------------------------------------------------------------------
 
-  function parseBody(bodyText, startIndex) {
+  function parseBodySegment(segText, startIndex) {
     const tokens = [];
     let cursor = 0;
     let noteIndex = startIndex;
@@ -100,21 +105,29 @@
     BODY_TOKEN_RE.lastIndex = 0;
     let match;
 
-    while ((match = BODY_TOKEN_RE.exec(bodyText)) !== null) {
+    while ((match = BODY_TOKEN_RE.exec(segText)) !== null) {
       const matchStart = match.index;
       const matchEnd = matchStart + match[0].length;
 
       // Capture any literal text between cursor and this match as a text token.
       if (matchStart > cursor) {
-        tokens.push({ type: 'text', raw: bodyText.slice(cursor, matchStart) });
+        tokens.push({ type: 'text', raw: segText.slice(cursor, matchStart) });
       }
 
-      if (match[5] === 'z') {
-        // Rest token
+      if (match[7] !== undefined) {
+        // Inline field change: [X:value]
+        tokens.push({
+          type: 'field-change',
+          raw: match[0],
+          field: match[7],
+          value: match[8],
+        });
+      } else if (match[5] !== undefined) {
+        // Rest token (match[5] === 'z')
         const durationABC = match[6] || '';
         tokens.push({
           type: 'rest',
-          raw: match[0],          // original text (used for toABC reconstruction)
+          raw: match[0],
           durationABC,
           index: noteIndex++,
         });
@@ -139,8 +152,43 @@
     }
 
     // Any trailing text after the last note/rest
-    if (cursor < bodyText.length) {
-      tokens.push({ type: 'text', raw: bodyText.slice(cursor) });
+    if (cursor < segText.length) {
+      tokens.push({ type: 'text', raw: segText.slice(cursor) });
+    }
+
+    return { tokens, noteIndex };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Body parser — processes body text line by line.
+  // Lines matching /^[A-Za-z]:/ become field-change tokens.
+  // All other lines are parsed with parseBodySegment for notes/rests/inline changes.
+  // noteIndex is the starting index for note/rest tokens.
+  // ---------------------------------------------------------------------------
+
+  function parseBody(bodyText, startIndex) {
+    const tokens = [];
+    let noteIndex = startIndex;
+
+    const lines = bodyText.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Preserve the newline for all lines except possibly the last.
+      const lineText = i < lines.length - 1 ? line + '\n' : line;
+
+      if (/^[A-Za-z]:/.test(line)) {
+        // Body-line field change (mid-tune K:, M:, L:, Q:, etc.)
+        const colonIdx = line.indexOf(':');
+        const field = line.slice(0, colonIdx);
+        const value = line.slice(colonIdx + 1).trim();
+        tokens.push({ type: 'field-change', raw: lineText, field, value });
+      } else {
+        // Regular body line — parse for notes, rests, inline field changes
+        const result = parseBodySegment(lineText, noteIndex);
+        for (const t of result.tokens) tokens.push(t);
+        noteIndex = result.noteIndex;
+      }
     }
 
     return tokens;
@@ -152,7 +200,7 @@
 
   class MusicState {
     constructor() {
-      /** @type {Array<Object>} flat token list (header | note | rest | text) */
+      /** @type {Array<Object>} flat token list (header | note | rest | text | field-change) */
       this._tokens = [];
 
       /** @type {Set<Function>} change subscribers */
@@ -167,6 +215,10 @@
      * Parse ABC text. Replaces all existing tokens.
      * Clears any note durations that may have been set previously.
      *
+     * The header section ends at the first K: line (standard ABC), or at the
+     * last contiguous header line if no K: is present. Mid-tune lines matching
+     * /^[A-Za-z]:/ are parsed as field-change tokens within the body.
+     *
      * @param {string} abcText
      */
     parseABC(abcText) {
@@ -179,18 +231,22 @@
       const tokens = [];
       const lines = abcText.split('\n');
 
-      // Split into header lines vs body lines.
-      // Headers are lines matching /^[A-Za-z]:/ that appear before the body.
-      // The body begins after the last contiguous header line group, OR after
-      // the K: (key) header, whichever comes first — standard ABC convention.
-      // For simplicity we treat every line matching /^[A-Za-z]:/ as a header
-      // and collect the rest as body text.
-      let bodyLines = [];
+      // Locate the header/body boundary.
+      // Standard ABC: body begins after the first K: (key) header line.
+      // Fallback (no K:): after the last contiguous header line at the top.
+      // We stop scanning for headers as soon as we hit the first K: line OR
+      // the first non-empty, non-header line (whichever comes first).
       let lastHeaderIdx = -1;
 
       for (let i = 0; i < lines.length; i++) {
         if (/^[A-Za-z]:/.test(lines[i])) {
           lastHeaderIdx = i;
+          if (/^K:/.test(lines[i])) {
+            break; // K: marks the end of the header section
+          }
+        } else if (lines[i].trim() !== '') {
+          // First non-empty, non-header line: body has started
+          break;
         }
       }
 
@@ -199,6 +255,7 @@
       }
 
       // Everything after the last header line is body text.
+      let bodyLines = [];
       if (lastHeaderIdx < lines.length - 1) {
         bodyLines = lines.slice(lastHeaderIdx + 1);
       }
@@ -233,7 +290,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // Header accessors
+    // Header accessors (always return the initial/header-level value)
     // -------------------------------------------------------------------------
 
     /** Title from T: header, or null. */
@@ -270,6 +327,87 @@
      */
     get tempo() {
       return parseTempo(getHeader(this._tokens, 'Q'));
+    }
+
+    // -------------------------------------------------------------------------
+    // Mid-tune context
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the active musical context at a given note index, reflecting any
+     * field changes (K:, M:, L:, Q:) that have occurred *before* that note in
+     * document order. Seeds from header-level values.
+     *
+     * @param {number} noteIndex  — the .index value of the target note
+     * @returns {{ timeSig: string|null, beatsPerMeasure: number|null,
+     *             key: string|null, unitLength: number|null, tempo: number|null }}
+     */
+    getContextAtNote(noteIndex) {
+      // Seed with header-level values
+      let timeSig = this.timeSignature;
+      let key = this.keySignature;
+      let unitLength = this.unitNoteLength;
+      let tempo = this.tempo;
+
+      // Scan tokens in document order. Accumulate field changes until we hit
+      // the target note (or a note with a higher index).
+      for (const tok of this._tokens) {
+        if ((tok.type === 'note' || tok.type === 'rest') && tok.index >= noteIndex) {
+          break;
+        }
+        if (tok.type === 'field-change') {
+          switch (tok.field) {
+            case 'M': timeSig = tok.value; break;
+            case 'K': key = tok.value; break;
+            case 'L': unitLength = parseUnitNoteLength(tok.value); break;
+            case 'Q': tempo = parseTempo(tok.value); break;
+          }
+        }
+      }
+
+      return {
+        timeSig,
+        beatsPerMeasure: parseBeatsPerMeasure(timeSig),
+        key,
+        unitLength,
+        tempo,
+      };
+    }
+
+    /**
+     * Array of every mid-tune field change with the index of the *next* note
+     * after the change (i.e. "this change takes effect before note N").
+     * If a field change appears before any notes, noteIndex is 0.
+     * Only field-change tokens in the body are included (header tokens are not).
+     *
+     * @returns {Array<{ noteIndex: number, field: string, value: string }>}
+     */
+    get fieldChanges() {
+      const changes = [];
+      /** Field-change tokens waiting for the next note to anchor them. */
+      const pending = [];
+
+      for (const tok of this._tokens) {
+        if (tok.type === 'note' || tok.type === 'rest') {
+          // Anchor all pending field changes to this note's index
+          for (const fc of pending) {
+            changes.push({ noteIndex: tok.index, field: fc.field, value: fc.value });
+          }
+          pending.length = 0;
+        } else if (tok.type === 'field-change') {
+          pending.push(tok);
+        }
+      }
+
+      // Field changes that trail after all notes
+      if (pending.length > 0) {
+        const count = this.noteCount;
+        for (const fc of pending) {
+          changes.push({ noteIndex: count, field: fc.field, value: fc.value });
+        }
+      }
+
+      return changes;
     }
 
     // -------------------------------------------------------------------------
@@ -335,7 +473,8 @@
      * Serialize back to ABC text with current durations applied.
      *
      * For each note/rest token we reconstruct the raw text using the current
-     * durationABC instead of the original. All other tokens are emitted verbatim.
+     * durationABC instead of the original. All other tokens (header, text,
+     * field-change) are emitted verbatim via their .raw property.
      *
      * @returns {string}
      */
@@ -348,7 +487,7 @@
         if (tok.type === 'rest') {
           return 'z' + tok.durationABC;
         }
-        // header or text — verbatim
+        // header, text, or field-change — verbatim
         return tok.raw;
       }).join('');
     }
