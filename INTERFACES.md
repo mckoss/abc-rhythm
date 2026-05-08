@@ -98,6 +98,55 @@ class ScoreRenderer {
 
 ---
 
+## note-player.js — Web Audio API note playback
+
+```js
+class NotePlayer {
+  constructor()
+
+  // ── Duration-known playback (sequence / chord) ────────────────────────────
+
+  // Play a note for a known duration. Non-blocking; returns immediately.
+  // Applies a 20 ms release ramp at the end to avoid clicks.
+  //   pitch      — 'C'–'B' (uppercase = octave 4, lowercase = octave 5)
+  //   accidental — '^' | '^^' | '_' | '__' | '=' | ''
+  //   octave     — string of "'" (up) and "," (down) modifiers, e.g. "'" | ",,"
+  //   durationMs — sustain duration before release begins
+  async playNote(pitch, accidental, octave, durationMs)
+
+  // ── Hold-until-release playback (tap feedback) ────────────────────────────
+
+  // Called on spacebar keydown — starts the note, holds it at constant gain
+  // indefinitely (no decay). If a note is already held, it is silenced first.
+  // Returns the AudioContext timestamp (seconds) when the note started.
+  async startNote(pitch, accidental, octave)  // → number (audioCtx seconds)
+
+  // Called on spacebar keyup — applies a 20 ms release ramp and stops the note.
+  // Returns wall-clock timings (ms, Date.now() scale).
+  // Returns { startTime: 0, endTime: 0, durationMs: 0 } if no note was held.
+  stopCurrentNote()  // → { startTime, endTime, durationMs }
+
+  // Duration in ms between the last startNote() and stopCurrentNote() calls.
+  // Returns 0 if no note has been played yet.
+  get lastNoteDurationMs()  // → number
+}
+
+// Export as window.NotePlayer
+```
+
+Typical tap-feedback usage in the controller:
+```js
+// keydown:
+const audioStart = await notePlayer.startNote(pitch, accidental, octave);
+const tapStartTime = Date.now();
+
+// keyup:
+const { durationMs } = notePlayer.stopCurrentNote();
+// pass durationMs to quantizer as the held-note interval
+```
+
+---
+
 ## abc-rhythm.js (existing, to be updated by coordinator)
 
 Main app controller. Imports and coordinates all modules.
