@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>abc-rhythm — tap to annotate ABC notation</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>abc-rhythm</h1>
+  <p>Tap the spacebar in rhythm to annotate note durations in ABC notation.</p>
+</header>
+
+<main>
+
+  <!-- Tap zone (spans full width) -->
+  <div class="tap-zone">
+    <div class="tap-controls">
+      <button id="start-btn" class="btn-primary" disabled>▶ Start Tapping</button>
+      <button id="redo-btn" class="btn-secondary" disabled>↺ Redo</button>
+      <span id="tap-status" class="tap-status">Paste ABC notation on the left to begin.</span>
+      <span id="bpm-display" class="bpm-display"></span>
+    </div>
+
+    <div id="note-sequence" class="note-sequence">
+      <span style="color:var(--muted);font-size:0.85rem">Notes will appear here once you paste ABC above.</span>
+    </div>
+
+    <button id="tap-btn" class="big-tap-btn" disabled>TAP</button>
+  </div>
+
+  <!-- Input panel -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>ABC Input</h2>
+      <div class="actions">
+        <button id="clear-btn" class="btn-secondary" disabled>Clear</button>
+      </div>
+    </div>
+    <textarea id="input-abc"
+      placeholder="Paste your ABC notation here. Notes without durations are fine — e.g.:&#10;&#10;X:1&#10;T:My Tune&#10;M:4/4&#10;L:1/4&#10;K:C&#10;CDECCDEC EFGE EFGz|"
+      spellcheck="false"
+    ></textarea>
+  </div>
+
+  <!-- Output panel -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Annotated ABC Output</h2>
+      <div class="actions">
+        <button id="copy-btn" class="btn-primary" disabled>Copy</button>
+      </div>
+    </div>
+    <textarea id="output-abc"
+      placeholder="Annotated ABC will appear here after tapping."
+      readonly
+      spellcheck="false"
+    ></textarea>
+  </div>
+
+</main>
+
+<script src="abc-rhythm.js"></script>
+</body>
+</html>

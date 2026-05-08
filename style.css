@@ -1,0 +1,249 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #1e1e2e;
+  --surface: #2a2a3e;
+  --border: #3a3a5e;
+  --accent: #7c6af7;
+  --accent-hi: #a89cf8;
+  --text: #e0e0f0;
+  --muted: #888aaa;
+  --note-bg: #2e2e48;
+  --note-active: #7c6af7;
+  --note-done: #3a3a5e;
+  --note-text-done: #666;
+  --success: #4caf7d;
+  --danger: #e05c5c;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent-hi);
+  letter-spacing: -0.5px;
+}
+
+header p {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.tap-zone {
+  grid-column: 1 / -1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tap-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.tap-status {
+  font-size: 0.9rem;
+  color: var(--muted);
+  flex: 1;
+}
+
+.tap-status.active {
+  color: var(--accent-hi);
+  font-weight: 600;
+}
+
+.tap-status.done {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.note-sequence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 48px;
+  align-items: center;
+}
+
+.note-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--note-bg);
+  border: 2px solid transparent;
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  transition: all 0.1s ease;
+  cursor: default;
+  user-select: none;
+}
+
+.note-chip.active {
+  background: var(--note-active);
+  border-color: var(--accent-hi);
+  color: #fff;
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(124, 106, 247, 0.6);
+}
+
+.note-chip.done {
+  background: var(--note-done);
+  color: var(--note-text-done);
+}
+
+.note-chip.rest {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.panel-header h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.panel-header .actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  padding: 0.75rem 1rem;
+  resize: none;
+}
+
+textarea::placeholder { color: var(--muted); }
+
+textarea[readonly] {
+  color: #aaa;
+  cursor: default;
+}
+
+button {
+  padding: 0.4rem 0.85rem;
+  border: none;
+  border-radius: 5px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+button:active { transform: scale(0.97); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) { background: var(--accent-hi); }
+
+.btn-secondary {
+  background: var(--border);
+  color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) { background: #4a4a6e; }
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.big-tap-btn {
+  width: 100%;
+  padding: 1.1rem;
+  font-size: 1.1rem;
+  border-radius: 8px;
+  letter-spacing: 0.05em;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  user-select: none;
+}
+
+.big-tap-btn:active { transform: scale(0.98); background: var(--accent-hi); }
+.big-tap-btn.tapping { background: #3a6a4f; }
+.big-tap-btn.tapping:active { background: var(--success); }
+
+.bpm-display {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 700px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  .tap-zone {
+    grid-column: 1;
+  }
+}
