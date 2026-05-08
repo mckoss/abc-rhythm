@@ -1,375 +1,388 @@
-// abc-rhythm.js
-// Core logic: parse ABC notation, record tap timings, compute + annotate durations.
-
-// ---------------------------------------------------------------------------
-// ABC Parser — extracts note tokens while preserving all other text verbatim
-// ---------------------------------------------------------------------------
-
-// Matches a single note or rest token:
-//   group 1: accidental  (^, ^^, _, __, =)
-//   group 2: pitch       (A-G, a-g)
-//   group 3: octave      (,* or '*)
-//   group 4: duration    (e.g. 2, /, /2, 3/2 — may be empty)
-// Also matches rest 'z' (group 5) with optional duration (group 6)
-const NOTE_RE = /(\^{1,2}|_{1,2}|=)?([A-Ga-g])([,']*)(\d*\/?(?:\d+)?)|z([,']*)(\d*\/?(?:\d+)?)/g;
-
 /**
- * Split an ABC tune into an array of segments.
- * Each segment is either:
- *   { type: 'note', raw, accidental, pitch, octave, duration, index }
- *   { type: 'rest', raw, duration, index }
- *   { type: 'text', raw }   — everything else (headers, bars, spaces, etc.)
+ * abc-rhythm.js — main controller
  *
- * 'index' is the note/rest number (0-based) for mapping tap times back.
- */
-function parseABC(abcText) {
-  const segments = [];
-  let noteIndex = 0;
-  let cursor = 0;
-
-  // Split headers from body at the first blank-line-after-K: or after all headers
-  // We'll parse everything and just let the regex skip over header lines naturally.
-
-  NOTE_RE.lastIndex = 0;
-  let match;
-
-  while ((match = NOTE_RE.exec(abcText)) !== null) {
-    // Check if we're inside a header line (lines starting with a letter + colon)
-    const before = abcText.slice(0, match.index);
-    const lastNewline = before.lastIndexOf('\n');
-    const lineStart = before.slice(lastNewline + 1).trimStart();
-    const isHeader = /^[A-Za-z]:/.test(lineStart);
-
-    if (isHeader) {
-      // Don't treat this as a note — it's part of a field like "K:C" or "T:My Tune"
-      // Push the gap as text and continue
-      continue;
-    }
-
-    // Push text between last cursor and this match
-    if (match.index > cursor) {
-      segments.push({ type: 'text', raw: abcText.slice(cursor, match.index) });
-    }
-
-    if (match[2]) {
-      // It's a note
-      segments.push({
-        type: 'note',
-        raw: match[0],
-        accidental: match[1] || '',
-        pitch: match[2],
-        octave: match[3] || '',
-        duration: match[4] || '',
-        index: noteIndex++
-      });
-    } else {
-      // It's a rest (z)
-      segments.push({
-        type: 'rest',
-        raw: match[0],
-        duration: match[6] || '',
-        index: noteIndex++
-      });
-    }
-
-    cursor = match.index + match[0].length;
-  }
-
-  // Remaining text after last match
-  if (cursor < abcText.length) {
-    segments.push({ type: 'text', raw: abcText.slice(cursor) });
-  }
-
-  return segments;
-}
-
-/**
- * Rebuild ABC text from segments, substituting new durations.
- * durations: array of ABC duration strings, indexed by note/rest index.
- */
-function rebuildABC(segments, durations) {
-  return segments.map(seg => {
-    if (seg.type === 'note') {
-      const dur = durations[seg.index] !== undefined ? durations[seg.index] : seg.duration;
-      return seg.accidental + seg.pitch + seg.octave + dur;
-    }
-    if (seg.type === 'rest') {
-      const dur = durations[seg.index] !== undefined ? durations[seg.index] : seg.duration;
-      return 'z' + dur;
-    }
-    return seg.raw;
-  }).join('');
-}
-
-/**
- * Return just the note/rest segments (for display in the tap UI).
- */
-function getNoteSegments(segments) {
-  return segments.filter(s => s.type === 'note' || s.type === 'rest');
-}
-
-// ---------------------------------------------------------------------------
-// Duration Quantization
-// ---------------------------------------------------------------------------
-
-// Standard durations as multiples of a quarter note (beat).
-// Ordered from largest to smallest for snapping.
-const STANDARD_DURATIONS = [
-  { mult: 4,     abc: '4'   },  // whole
-  { mult: 3,     abc: '3'   },  // dotted half
-  { mult: 2,     abc: '2'   },  // half
-  { mult: 1.5,   abc: '3/2' },  // dotted quarter
-  { mult: 1,     abc: ''    },  // quarter (default = no suffix when L:1/4)
-  { mult: 0.75,  abc: '3/4' },  // dotted eighth
-  { mult: 0.5,   abc: '/'   },  // eighth
-  { mult: 0.375, abc: '3/8' },  // dotted sixteenth
-  { mult: 0.25,  abc: '/4'  },  // sixteenth
-];
-
-/**
- * Snap a float ratio (interval / beat) to the nearest standard duration.
- * Returns an ABC duration string.
- */
-function snapDuration(ratio) {
-  let best = STANDARD_DURATIONS[0];
-  let bestDist = Infinity;
-  for (const d of STANDARD_DURATIONS) {
-    const dist = Math.abs(Math.log(ratio / d.mult)); // log-scale distance
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = d;
-    }
-  }
-  return best.abc;
-}
-
-/**
- * Given an array of tap timestamps (ms), compute ABC duration strings
- * for each note. One tap per note (the tap marks the START of that note;
- * the next tap marks its end). A final extra tap ends the last note.
+ * Wires together: MusicState (IR) ← Quantize → ClickTrack → performance UI → ScoreRenderer
  *
- * Returns { durations: string[], bpm: number }
+ * State machine:
+ *   idle → loaded → countdown → recording → reviewing
+ *                                   ↑____________↓ (redo)
  */
-function computeDurations(tapTimes) {
-  if (tapTimes.length < 2) return { durations: [], bpm: 0 };
-
-  // Intervals between consecutive taps
-  const intervals = [];
-  for (let i = 1; i < tapTimes.length; i++) {
-    intervals.push(tapTimes[i] - tapTimes[i - 1]);
-  }
-
-  // Beat = median interval
-  const sorted = [...intervals].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const beat = sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
-
-  const bpm = Math.round(60000 / beat);
-
-  // For each interval, compute ratio and snap to duration
-  const durations = intervals.map(iv => snapDuration(iv / beat));
-
-  return { durations, bpm };
-}
 
 // ---------------------------------------------------------------------------
-// App State
+// Module instances (populated after DOMContentLoaded)
 // ---------------------------------------------------------------------------
+let state;       // MusicState — reactive IR
+let clickTrack;  // ClickTrack
+let renderer;    // ScoreRenderer
 
-let state = {
-  phase: 'idle',       // idle | tapping | done
-  segments: [],
-  notes: [],           // note/rest segments
-  tapTimes: [],
-  currentNoteIdx: 0,
-  bpm: 0,
-  outputDurations: [],
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+const app = {
+  phase: 'idle',          // idle | loaded | countdown | recording | reviewing
+  tapTimes: [],           // raw tap timestamps (ms)
+  countInBeatsLeft: 0,    // beats remaining in count-in
+  recordingStartTime: 0,  // ms timestamp when recording began (first beat after count-in)
+  currentNoteIdx: 0,      // which note chip is "active" (tracks beats during recording)
+  beatIdx: 0,             // current beat within measure (for beat-dot display)
 };
 
 // ---------------------------------------------------------------------------
-// DOM refs (populated on DOMContentLoaded)
+// DOM refs
 // ---------------------------------------------------------------------------
-
-let elInput, elOutput, elNoteSeq, elTapBtn, elStatus, elBpm;
-let elStartBtn, elRedoBtn, elCopyBtn, elClearBtn;
-
-function $(id) { return document.getElementById(id); }
+const $ = id => document.getElementById(id);
+let elInputAbc, elOutputAbc, elNoteStrip, elTapBtn, elTransportStatus,
+    elStartBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
+    elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel,
+    elTimeSig, elResolution, elCountIn, elSubdivision;
 
 // ---------------------------------------------------------------------------
-// UI rendering
+// Settings helpers
 // ---------------------------------------------------------------------------
+function getSettings() {
+  return {
+    timeSig:     elTimeSig.value,           // '4/4'
+    bpm:         parseInt(elBpmSlider.value, 10),
+    resolution:  elResolution.value,        // 'eighth' etc.
+    countIn:     parseInt(elCountIn.value, 10),
+    subdivision: parseInt(elSubdivision.value, 10),
+  };
+}
 
-function renderNoteSequence() {
-  elNoteSeq.innerHTML = '';
-  if (state.notes.length === 0) {
-    elNoteSeq.innerHTML = '<span style="color:var(--muted);font-size:0.85rem">Notes will appear here once you paste ABC above.</span>';
+function parseTimeSig(sig) {
+  if (sig === '2/2') return 2;
+  const parts = sig.split('/');
+  return parseInt(parts[0], 10) || 4;
+}
+
+// ---------------------------------------------------------------------------
+// Beat-dot display
+// ---------------------------------------------------------------------------
+function buildBeatDots(beatsPerMeasure) {
+  elBeatDisplay.innerHTML = '';
+  for (let i = 0; i < beatsPerMeasure; i++) {
+    const d = document.createElement('div');
+    d.className = 'beat-dot' + (i === 0 ? ' downbeat' : '');
+    d.id = `beat-dot-${i}`;
+    elBeatDisplay.appendChild(d);
+  }
+}
+
+function flashBeat(beatIdx) {
+  document.querySelectorAll('.beat-dot').forEach((d, i) => {
+    d.classList.toggle('active', i === beatIdx);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Note strip rendering
+// ---------------------------------------------------------------------------
+function renderNoteStrip() {
+  elNoteStrip.innerHTML = '';
+  if (!state || state.noteCount === 0) {
+    elNoteStrip.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Notes appear here after loading.</span>';
     return;
   }
-  state.notes.forEach((note, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'note-chip';
-    if (note.type === 'rest') chip.classList.add('rest');
 
-    // Display label: pitch letter (uppercase for readability) or 'z' for rest
-    const label = note.type === 'rest' ? 'z' : note.pitch.toUpperCase() + note.octave.replace(/,/g, '↓').replace(/'/g, '↑');
-    chip.textContent = label;
-    chip.id = `note-chip-${i}`;
-
-    if (state.phase === 'tapping') {
-      if (i < state.currentNoteIdx) chip.classList.add('done');
-      else if (i === state.currentNoteIdx) chip.classList.add('active');
-    } else if (state.phase === 'done') {
-      chip.classList.add('done');
+  // Rebuild from raw tokens so we can show bar lines too
+  const tokens = state.tokens || state.notes; // fall back gracefully
+  (tokens || state.notes).forEach(tok => {
+    if (tok.type === 'bar') {
+      const el = document.createElement('div');
+      el.className = 'note-chip bar';
+      el.textContent = '|';
+      elNoteStrip.appendChild(el);
+      return;
     }
+    if (tok.type !== 'note' && tok.type !== 'rest') return;
 
-    elNoteSeq.appendChild(chip);
+    const chip = document.createElement('div');
+    chip.className = 'note-chip' + (tok.type === 'rest' ? ' rest' : '');
+    chip.id = `chip-${tok.index}`;
+
+    const pitchEl = document.createElement('span');
+    pitchEl.textContent = tok.type === 'rest'
+      ? 'z'
+      : (tok.accidental || '') + tok.pitch.toUpperCase() + (tok.octave || '').replace(/,/g, '↓').replace(/'/g, '↑');
+
+    const durEl = document.createElement('span');
+    durEl.className = 'dur-label';
+    durEl.id = `dur-${tok.index}`;
+    durEl.textContent = tok.durationABC || '—';
+
+    chip.appendChild(pitchEl);
+    chip.appendChild(durEl);
+
+    if (app.phase === 'recording' || app.phase === 'reviewing') {
+      if (tok.index < app.currentNoteIdx) chip.classList.add('done');
+      else if (tok.index === app.currentNoteIdx && app.phase === 'recording') chip.classList.add('active');
+    }
+    if (app.phase === 'reviewing') chip.classList.add('done');
+
+    elNoteStrip.appendChild(chip);
+  });
+}
+
+// Update just the duration label and chip state for a single note (reactive, no full re-render)
+function updateChip(noteIndex, durationABC) {
+  const durEl = $(`dur-${noteIndex}`);
+  if (durEl) durEl.textContent = durationABC || '—';
+}
+
+function advanceActiveChip(newIdx) {
+  const prev = $(`chip-${newIdx - 1}`);
+  if (prev) { prev.classList.remove('active'); prev.classList.add('done'); }
+  const next = $(`chip-${newIdx}`);
+  if (next) {
+    next.classList.add('active');
+    next.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reactive: MusicState → renderer (live re-render on every state change)
+// ---------------------------------------------------------------------------
+function onStateChange() {
+  // Update score live
+  renderer.render(state.toABC());
+
+  // Update duration labels on chips
+  state.notes.forEach(note => {
+    updateChip(note.index, note.durationABC);
   });
 
-  // Scroll active chip into view
-  if (state.phase === 'tapping') {
-    const active = document.getElementById(`note-chip-${state.currentNoteIdx}`);
-    if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
-  }
-}
-
-function setStatus(msg, cls = '') {
-  elStatus.textContent = msg;
-  elStatus.className = 'tap-status' + (cls ? ` ${cls}` : '');
-}
-
-function updateBpm() {
-  elBpm.textContent = state.bpm ? `~${state.bpm} BPM` : '';
+  // Update ABC output textarea
+  elOutputAbc.value = state.toABC();
+  elCopyBtn.disabled = false;
 }
 
 // ---------------------------------------------------------------------------
-// Phase transitions
+// Loading ABC
 // ---------------------------------------------------------------------------
+function loadABC() {
+  const text = elInputAbc.value.trim();
+  if (!text) return;
 
-function onInputChange() {
-  const abc = elInput.value.trim();
-  if (!abc) {
-    state.segments = [];
-    state.notes = [];
-    renderNoteSequence();
-    setStatus('Paste ABC notation on the left to begin.');
-    elStartBtn.disabled = true;
+  state.parseABC(text);
+  if (state.noteCount === 0) {
+    setStatus('No notes found — check your ABC notation.', '');
     return;
   }
 
-  state.segments = parseABC(abc);
-  state.notes = getNoteSegments(state.segments);
-  renderNoteSequence();
-
-  const n = state.notes.length;
-  setStatus(n > 0
-    ? `${n} note${n !== 1 ? 's' : ''} found. Press Start Tapping when ready.`
-    : 'No notes found — check your ABC notation.');
-  elStartBtn.disabled = n === 0;
-  elClearBtn.disabled = false;
-}
-
-function startTapping() {
-  if (state.notes.length === 0) return;
-
-  state.phase = 'tapping';
-  state.tapTimes = [];
-  state.currentNoteIdx = 0;
-  state.bpm = 0;
-  state.outputDurations = [];
-
-  elStartBtn.disabled = true;
-  elRedoBtn.disabled = false;
-  elTapBtn.disabled = false;
-  elTapBtn.className = 'big-tap-btn tapping';
-  elTapBtn.textContent = `TAP — Note 1 of ${state.notes.length}`;
-  elCopyBtn.disabled = true;
-  elOutput.value = '';
-  updateBpm();
-
-  setStatus(`Tap for each note. ${state.notes.length} notes + 1 final tap to finish.`, 'active');
-  renderNoteSequence();
-  elTapBtn.focus();
-}
-
-function recordTap() {
-  if (state.phase !== 'tapping') return;
-
-  state.tapTimes.push(Date.now());
-  state.currentNoteIdx++;
-
-  const remaining = state.notes.length - state.currentNoteIdx;
-
-  if (state.currentNoteIdx <= state.notes.length) {
-    // Update BPM estimate after a few taps
-    if (state.tapTimes.length >= 3) {
-      const { bpm } = computeDurations(state.tapTimes);
-      state.bpm = bpm;
-      updateBpm();
-    }
+  // Sync time signature from ABC if present
+  if (state.timeSignature) {
+    elTimeSig.value = state.timeSignature;
+  }
+  if (state.tempo) {
+    elBpmSlider.value = state.tempo;
+    elBpmLabel.textContent = state.tempo;
   }
 
-  if (state.currentNoteIdx > state.notes.length) {
-    // Final tap — we have one more interval than notes, which is fine;
-    // computeDurations uses intervals so we need notes+1 taps total.
-    finishTapping();
-    return;
-  }
+  const s = getSettings();
+  buildBeatDots(parseTimeSig(s.timeSig));
 
-  if (remaining > 0) {
-    elTapBtn.textContent = `TAP — Note ${state.currentNoteIdx + 1} of ${state.notes.length}`;
-    setStatus(`${remaining} note${remaining !== 1 ? 's' : ''} left, then one final tap.`, 'active');
-  } else {
-    // Last note tapped — one more tap needed to close it
-    elTapBtn.textContent = 'TAP — Final tap to end last note';
-    setStatus('One more tap to set the duration of the last note.', 'active');
-  }
+  app.phase = 'loaded';
+  renderNoteStrip();
+  renderer.render(state.toABC());
+  elOutputAbc.value = state.toABC();
 
-  renderNoteSequence();
-}
-
-function finishTapping() {
-  state.phase = 'done';
-
-  const { durations, bpm } = computeDurations(state.tapTimes);
-  state.bpm = bpm;
-  state.outputDurations = durations;
-
-  const annotated = rebuildABC(state.segments, durations);
-  elOutput.value = annotated;
-
-  elTapBtn.disabled = true;
-  elTapBtn.textContent = 'Done!';
-  elTapBtn.className = 'big-tap-btn';
   elStartBtn.disabled = false;
-  elRedoBtn.disabled = false;
+  elClearBtn.disabled = false;
+  elRedoBtn.disabled = true;
   elCopyBtn.disabled = false;
 
-  updateBpm();
-  setStatus(`Done! Detected ~${bpm} BPM. Annotated ABC is on the right.`, 'done');
-  renderNoteSequence();
+  setStatus(`${state.noteCount} notes loaded. Press Start to begin.`, 'ready');
 }
 
-function redoTapping() {
-  state.phase = 'idle';
-  state.tapTimes = [];
-  state.currentNoteIdx = 0;
-  state.bpm = 0;
-  elOutput.value = '';
-  elTapBtn.disabled = true;
-  elTapBtn.className = 'big-tap-btn';
-  elTapBtn.textContent = 'TAP';
-  elStartBtn.disabled = state.notes.length === 0;
+// ---------------------------------------------------------------------------
+// Start / Stop / Redo
+// ---------------------------------------------------------------------------
+function startSession() {
+  if (app.phase === 'idle' || state.noteCount === 0) return;
+
+  const s = getSettings();
+  const beatsPerMeasure = parseTimeSig(s.timeSig);
+  const totalCountInBeats = s.countIn * beatsPerMeasure;
+
+  // Reset tap state
+  app.tapTimes = [];
+  app.currentNoteIdx = 0;
+  app.countInBeatsLeft = totalCountInBeats;
+  app.recordingStartTime = 0;
+  app.phase = totalCountInBeats > 0 ? 'countdown' : 'recording';
+
+  // Configure and start click track
+  clickTrack.configure({
+    bpm: s.bpm,
+    beatsPerMeasure,
+    subdivision: s.subdivision,
+  });
+
+  clickTrack.start(onTick);
+
+  // UI
+  elStartBtn.disabled = true;
+  elStopBtn.disabled = false;
+  elTapBtn.disabled = app.phase === 'countdown'; // can't tap during count-in
+  elTapBtn.className = 'tap-btn' + (app.phase === 'recording' ? ' recording' : '');
   elRedoBtn.disabled = true;
-  elCopyBtn.disabled = true;
-  updateBpm();
-  setStatus(`${state.notes.length} notes ready. Press Start Tapping.`);
-  renderNoteSequence();
+  renderNoteStrip();
+
+  if (app.phase === 'countdown') {
+    setStatus(`Count-in: ${totalCountInBeats} beats…`, '');
+    elTapBtn.textContent = 'Waiting for count-in…';
+  } else {
+    setStatus(`Recording — tap for each note! (${state.noteCount} notes)`, 'recording');
+    elTapBtn.textContent = `TAP — Note 1 of ${state.noteCount}`;
+  }
 }
 
-function copyOutput() {
-  const text = elOutput.value;
+function stopSession() {
+  clickTrack.stop();
+  app.phase = app.tapTimes.length > 0 ? 'reviewing' : 'loaded';
+  elStopBtn.disabled = true;
+  elStartBtn.disabled = false;
+  elRedoBtn.disabled = false;
+  elTapBtn.disabled = true;
+  elTapBtn.className = 'tap-btn';
+  elTapBtn.textContent = 'SPACEBAR  /  TAP';
+  document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
+
+  if (app.tapTimes.length >= 2) {
+    finalizeQuantization();
+    setStatus('Done — score updated. Redo to re-record.', 'ready');
+  } else {
+    setStatus('Stopped. Press Start to try again.', '');
+  }
+  renderNoteStrip();
+}
+
+function redoSession() {
+  state.clearDurations();
+  app.phase = 'loaded';
+  app.tapTimes = [];
+  app.currentNoteIdx = 0;
+  elRedoBtn.disabled = true;
+  elTapBtn.disabled = true;
+  elTapBtn.textContent = 'SPACEBAR  /  TAP';
+  renderNoteStrip();
+  setStatus(`${state.noteCount} notes ready. Press Start.`, 'ready');
+}
+
+// ---------------------------------------------------------------------------
+// Click track tick handler
+// ---------------------------------------------------------------------------
+function onTick({ beat, subdiv, isMeasureStart, isBeatStart }) {
+  // Visual beat flash (only on beat starts)
+  if (isBeatStart) {
+    flashBeat(beat);
+  }
+
+  if (!isBeatStart) return; // only process on beats
+
+  // Count-in phase
+  if (app.phase === 'countdown') {
+    app.countInBeatsLeft--;
+    if (app.countInBeatsLeft <= 0) {
+      // Count-in done → switch to recording
+      app.phase = 'recording';
+      app.recordingStartTime = Date.now();
+      elTapBtn.disabled = false;
+      elTapBtn.className = 'tap-btn recording';
+      elTapBtn.textContent = `TAP — Note 1 of ${state.noteCount}`;
+      setStatus(`Recording — tap for each note!`, 'recording');
+    } else {
+      setStatus(`Count-in: ${app.countInBeatsLeft} beats…`, '');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tap handler
+// ---------------------------------------------------------------------------
+function recordTap() {
+  if (app.phase !== 'recording') return;
+
+  const now = Date.now();
+  app.tapTimes.push(now);
+
+  const tapNum = app.tapTimes.length; // 1-based
+
+  // Live quantization: re-quantize after every tap (need at least 2 taps = 1 interval)
+  if (app.tapTimes.length >= 2) {
+    liveQuantize();
+  }
+
+  // Advance the active note chip
+  app.currentNoteIdx = tapNum - 1; // tap N starts note N-1, ends note N-2
+
+  if (tapNum <= state.noteCount) {
+    advanceActiveChip(tapNum - 1);
+  }
+
+  if (tapNum > state.noteCount) {
+    // Extra tap = end of last note → finalize and stop
+    finalizeQuantization();
+    stopSession();
+    return;
+  }
+
+  const remaining = state.noteCount - tapNum + 1;
+  elTapBtn.textContent = remaining > 0
+    ? `TAP — Note ${tapNum + 1} of ${state.noteCount}`
+    : 'TAP — Final tap to close last note';
+
+  setStatus(`${remaining} note${remaining !== 1 ? 's' : ''} left, then one final tap.`, 'recording');
+}
+
+// ---------------------------------------------------------------------------
+// Quantization
+// ---------------------------------------------------------------------------
+function liveQuantize() {
+  const s = getSettings();
+  const bpm = parseInt(elBpmSlider.value, 10);
+  const durations = Quantize.quantizeTaps(app.tapTimes, {
+    bpm,
+    beatsPerMeasure: parseTimeSig(s.timeSig),
+    resolution: s.resolution,
+    startTime: app.recordingStartTime || app.tapTimes[0],
+  });
+  // Apply to state — triggers reactive re-render via subscriber
+  state.setAllDurations(durations);
+}
+
+function finalizeQuantization() {
+  liveQuantize();
+}
+
+// ---------------------------------------------------------------------------
+// Status helper
+// ---------------------------------------------------------------------------
+function setStatus(msg, cls) {
+  elTransportStatus.textContent = msg;
+  elTransportStatus.className = 'transport-status' + (cls ? ` ${cls}` : '');
+}
+
+// ---------------------------------------------------------------------------
+// Score tabs
+// ---------------------------------------------------------------------------
+function initTabs() {
+  document.querySelectorAll('.score-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.score-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const which = tab.dataset.tab;
+      $('score-container').style.display = which === 'score' ? '' : 'none';
+      $('abc-output-panel').style.display = which === 'abc' ? '' : 'none';
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Copy
+// ---------------------------------------------------------------------------
+function copyABC() {
+  const text = state.toABC();
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
     const orig = elCopyBtn.textContent;
@@ -378,65 +391,98 @@ function copyOutput() {
   });
 }
 
-function clearInput() {
-  elInput.value = '';
-  elOutput.value = '';
-  state.segments = [];
-  state.notes = [];
-  state.phase = 'idle';
-  state.tapTimes = [];
-  state.currentNoteIdx = 0;
-  state.bpm = 0;
-  elStartBtn.disabled = true;
-  elRedoBtn.disabled = true;
-  elCopyBtn.disabled = true;
-  elClearBtn.disabled = true;
-  elTapBtn.disabled = true;
-  elTapBtn.textContent = 'TAP';
-  elBpm.textContent = '';
-  setStatus('Paste ABC notation on the left to begin.');
-  renderNoteSequence();
-}
+// ---------------------------------------------------------------------------
+// Example tune
+// ---------------------------------------------------------------------------
+const EXAMPLE_ABC = `X:1
+T:Twinkle Twinkle
+M:4/4
+L:1/4
+Q:1/4=100
+K:C
+CCGG AAG FFEE DDC|GGFF EED GGFF EED|CCGG AAG FFEE DDC|]`;
 
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
-
 document.addEventListener('DOMContentLoaded', () => {
-  elInput    = $('input-abc');
-  elOutput   = $('output-abc');
-  elNoteSeq  = $('note-sequence');
-  elTapBtn   = $('tap-btn');
-  elStatus   = $('tap-status');
-  elBpm      = $('bpm-display');
-  elStartBtn = $('start-btn');
-  elRedoBtn  = $('redo-btn');
-  elCopyBtn  = $('copy-btn');
-  elClearBtn = $('clear-btn');
+  elInputAbc       = $('input-abc');
+  elOutputAbc      = $('output-abc');
+  elNoteStrip      = $('note-strip');
+  elTapBtn         = $('tap-btn');
+  elTransportStatus= $('transport-status');
+  elStartBtn       = $('start-btn');
+  elStopBtn        = $('stop-btn');
+  elRedoBtn        = $('redo-btn');
+  elCopyBtn        = $('copy-btn');
+  elClearBtn       = $('clear-btn');
+  elLoadBtn        = $('load-btn');
+  elExampleBtn     = $('example-btn');
+  elBeatDisplay    = $('beat-display');
+  elBpmSlider      = $('bpm-slider');
+  elBpmLabel       = $('bpm-label');
+  elTimeSig        = $('time-sig');
+  elResolution     = $('resolution');
+  elCountIn        = $('count-in');
+  elSubdivision    = $('subdivision');
 
-  elInput.addEventListener('input', onInputChange);
-  elStartBtn.addEventListener('click', startTapping);
-  elRedoBtn.addEventListener('click', redoTapping);
-  elCopyBtn.addEventListener('click', copyOutput);
-  elClearBtn.addEventListener('click', clearInput);
+  // Instantiate modules
+  state      = new MusicState();
+  clickTrack = new ClickTrack();
+  renderer   = new ScoreRenderer('score-container');
+
+  // Reactive: any state change → re-render score + update UI
+  state.subscribe(onStateChange);
+
+  // BPM slider label
+  elBpmSlider.addEventListener('input', () => {
+    elBpmLabel.textContent = elBpmSlider.value;
+  });
+
+  // Time sig change → rebuild beat dots
+  elTimeSig.addEventListener('change', () => {
+    buildBeatDots(parseTimeSig(elTimeSig.value));
+  });
+
+  // Buttons
+  elLoadBtn.addEventListener('click', loadABC);
+  elExampleBtn.addEventListener('click', () => {
+    elInputAbc.value = EXAMPLE_ABC;
+    loadABC();
+  });
+  elClearBtn.addEventListener('click', () => {
+    elInputAbc.value = '';
+    elOutputAbc.value = '';
+    state.parseABC('');
+    app.phase = 'idle';
+    app.tapTimes = [];
+    clickTrack.stop();
+    renderer.clear();
+    renderNoteStrip();
+    elStartBtn.disabled = true;
+    elStopBtn.disabled = true;
+    elRedoBtn.disabled = true;
+    elCopyBtn.disabled = true;
+    elClearBtn.disabled = true;
+    elTapBtn.disabled = true;
+    setStatus('Load ABC to begin.', '');
+  });
+  elStartBtn.addEventListener('click', startSession);
+  elStopBtn.addEventListener('click', stopSession);
+  elRedoBtn.addEventListener('click', redoSession);
+  elCopyBtn.addEventListener('click', copyABC);
   elTapBtn.addEventListener('click', recordTap);
 
-  // Spacebar taps anywhere on the page (when tapping phase is active)
+  // Spacebar
   document.addEventListener('keydown', e => {
-    if (e.code === 'Space' && state.phase === 'tapping') {
+    if (e.code === 'Space') {
       e.preventDefault();
-      recordTap();
+      if (app.phase === 'recording') recordTap();
     }
   });
 
-  // Seed with example
-  elInput.value = `X:1
-T:Example Melody
-M:4/4
-L:1/4
-K:C
-CDEF GABc|cdeg fedc|BGAF GECE|C4|]`;
-
-  onInputChange();
-  setStatus('Paste ABC notation on the left, or use the example above.');
+  // Score tabs
+  initTabs();
+  buildBeatDots(4);
+  setStatus('Load ABC to begin.', '');
 });

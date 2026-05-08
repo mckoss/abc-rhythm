@@ -3,65 +3,138 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>abc-rhythm — tap to annotate ABC notation</title>
+  <title>abc-rhythm</title>
   <link rel="stylesheet" href="style.css">
+  <!-- abcjs for score rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/abcjs@6.4.3/dist/abcjs-basic-min.js"></script>
 </head>
 <body>
 
 <header>
   <h1>abc-rhythm</h1>
-  <p>Tap the spacebar in rhythm to annotate note durations in ABC notation.</p>
+  <p>Tap the spacebar in time to a click track — annotate note durations live.</p>
 </header>
 
-<main>
+<div class="app">
 
-  <!-- Tap zone (spans full width) -->
-  <div class="tap-zone">
-    <div class="tap-controls">
-      <button id="start-btn" class="btn-primary" disabled>▶ Start Tapping</button>
-      <button id="redo-btn" class="btn-secondary" disabled>↺ Redo</button>
-      <span id="tap-status" class="tap-status">Paste ABC notation on the left to begin.</span>
-      <span id="bpm-display" class="bpm-display"></span>
-    </div>
+  <!-- ── Left sidebar ── -->
+  <aside class="sidebar">
 
-    <div id="note-sequence" class="note-sequence">
-      <span style="color:var(--muted);font-size:0.85rem">Notes will appear here once you paste ABC above.</span>
-    </div>
+    <!-- Settings -->
+    <div class="section">
+      <div class="section-title">Settings</div>
+      <div class="settings-grid">
 
-    <button id="tap-btn" class="big-tap-btn" disabled>TAP</button>
-  </div>
+        <div class="field">
+          <label>Time Signature</label>
+          <select id="time-sig">
+            <option value="4/4" selected>4/4</option>
+            <option value="3/4">3/4</option>
+            <option value="2/4">2/4</option>
+            <option value="6/8">6/8</option>
+            <option value="2/2">2/2 (cut)</option>
+          </select>
+        </div>
 
-  <!-- Input panel -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>ABC Input</h2>
-      <div class="actions">
-        <button id="clear-btn" class="btn-secondary" disabled>Clear</button>
+        <div class="field">
+          <label>Resolution</label>
+          <select id="resolution">
+            <option value="quarter">Quarter notes</option>
+            <option value="eighth" selected>Eighth notes</option>
+            <option value="sixteenth">Sixteenth notes</option>
+            <option value="thirty-second">32nd notes</option>
+          </select>
+        </div>
+
+        <div class="field" style="grid-column: 1 / -1">
+          <label>Tempo — <span id="bpm-label">100</span> BPM</label>
+          <input type="range" id="bpm-slider" min="40" max="240" value="100" step="1">
+        </div>
+
+        <div class="field">
+          <label>Count-in</label>
+          <select id="count-in">
+            <option value="0">None</option>
+            <option value="1" selected>1 measure</option>
+            <option value="2">2 measures</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Subdivision clicks</label>
+          <select id="subdivision">
+            <option value="1" selected>Beats only</option>
+            <option value="2">Eighth notes</option>
+            <option value="4">Sixteenth notes</option>
+          </select>
+        </div>
+
       </div>
     </div>
-    <textarea id="input-abc"
-      placeholder="Paste your ABC notation here. Notes without durations are fine — e.g.:&#10;&#10;X:1&#10;T:My Tune&#10;M:4/4&#10;L:1/4&#10;K:C&#10;CDECCDEC EFGE EFGz|"
-      spellcheck="false"
-    ></textarea>
-  </div>
 
-  <!-- Output panel -->
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Annotated ABC Output</h2>
-      <div class="actions">
-        <button id="copy-btn" class="btn-primary" disabled>Copy</button>
+    <!-- ABC input -->
+    <div class="abc-input-wrap">
+      <div class="section-title" style="padding: 0 0 0.5rem">ABC Notation Input</div>
+      <textarea id="input-abc" spellcheck="false"
+        placeholder="Paste ABC here — notes without durations are fine:&#10;&#10;X:1&#10;T:My Tune&#10;M:4/4&#10;L:1/4&#10;K:C&#10;CDEC CDEC EFGE EFGz|"
+      ></textarea>
+      <div class="input-actions">
+        <button class="btn-primary" id="load-btn">Load</button>
+        <button class="btn-secondary" id="example-btn">Example</button>
+        <button class="btn-secondary" id="clear-btn" disabled>Clear</button>
       </div>
     </div>
-    <textarea id="output-abc"
-      placeholder="Annotated ABC will appear here after tapping."
-      readonly
-      spellcheck="false"
-    ></textarea>
-  </div>
 
-</main>
+  </aside>
 
+  <!-- ── Main area ── -->
+  <div class="main-area">
+
+    <!-- Transport bar -->
+    <div class="transport">
+      <div class="transport-btns">
+        <button class="btn-primary" id="start-btn" disabled>▶ Start</button>
+        <button class="btn-danger"  id="stop-btn"  disabled>■ Stop</button>
+        <button class="btn-secondary" id="redo-btn" disabled>↺ Redo</button>
+      </div>
+      <div class="beat-display" id="beat-display"></div>
+      <div class="transport-status" id="transport-status">Load ABC to begin.</div>
+      <button class="btn-secondary" id="copy-btn" disabled>Copy ABC</button>
+    </div>
+
+    <!-- Note sequence strip -->
+    <div class="note-strip-wrap">
+      <div class="note-strip" id="note-strip">
+        <span style="color:var(--muted);font-size:0.8rem">Notes appear here after loading.</span>
+      </div>
+    </div>
+
+    <!-- TAP button -->
+    <div class="tap-area">
+      <button class="tap-btn" id="tap-btn" disabled>SPACEBAR  /  TAP</button>
+    </div>
+
+    <!-- Score + output -->
+    <div class="score-area">
+      <div class="score-tabs">
+        <button class="score-tab active" data-tab="score">Score</button>
+        <button class="score-tab" data-tab="abc">ABC Output</button>
+      </div>
+      <div id="score-container"></div>
+      <div class="output-abc-wrap" id="abc-output-panel" style="display:none">
+        <textarea id="output-abc" readonly spellcheck="false"
+          placeholder="Annotated ABC will appear here after recording."></textarea>
+      </div>
+    </div>
+
+  </div><!-- /main-area -->
+</div><!-- /app -->
+
+<!-- Modules (load order matters) -->
+<script src="music-state.js"></script>
+<script src="click-track.js"></script>
+<script src="quantize.js"></script>
+<script src="renderer.js"></script>
 <script src="abc-rhythm.js"></script>
 </body>
 </html>

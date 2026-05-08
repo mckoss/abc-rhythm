@@ -1,0 +1,114 @@
+# abc-rhythm — Module Interface Contracts
+
+All modules are plain ES6 classes/functions, no bundler, no framework.
+Each file is a standalone JS module loaded via `<script src="...">` in index.html.
+
+---
+
+## click-track.js — Web Audio API metronome
+
+```js
+class ClickTrack {
+  constructor()
+  // Configure before starting. Can call while stopped.
+  configure({ bpm, beatsPerMeasure, subdivision })
+  // subdivision: 1=beats only, 2=eighth notes, 4=sixteenth notes
+
+  // Start the click track. onTick is called on every subdivision tick.
+  // tickInfo = { beat (0-based), subdiv (0-based within beat),
+  //              isMeasureStart, isBeatStart, audioTime (AudioContext time) }
+  start(onTick)
+  stop()
+  get isPlaying()  // boolean
+  get bpm()
+  get beatsPerMeasure()
+  get subdivision()
+}
+
+// Export as window.ClickTrack
+```
+
+Sound design:
+- Measure downbeat: loud, higher-pitched click (~1000 Hz, 80ms)
+- Beat: medium click (~800 Hz, 60ms)
+- Subdivision: soft tick (~600 Hz, 40ms)
+- Use Web Audio API OscillatorNode + GainNode for clean clicks
+- Schedule ahead-of-time (lookahead ~100ms) for timing accuracy
+
+---
+
+## quantize.js — Beat grid quantization
+
+```js
+// Given an array of tap timestamps (ms, from Date.now()) and grid config,
+// compute ABC duration strings for each note.
+//
+// tapTimes: [t0, t1, t2, ...tN] — N taps = N-1 intervals (or N notes if last tap ends last note)
+// config: {
+//   bpm: number,
+//   beatsPerMeasure: number,
+//   resolution: 'quarter'|'eighth'|'sixteenth'|'thirty-second',
+//   startTime: number  // ms timestamp of the first beat (measure downbeat)
+// }
+// Returns: string[] of ABC duration strings, one per tap interval
+//   e.g. ['2', '1', '/', '/2', '3/2']   (relative to L:1/4)
+//
+function quantizeTaps(tapTimes, config)
+
+// Build the beat grid as an array of timestamps.
+// startTime: ms, duration: ms total length to cover
+// Returns: number[] of grid point timestamps
+function buildGrid(startTime, duration, { bpm, resolution })
+
+// Convert a duration in beats (float) to an ABC duration string,
+// given L:1/4 as the note unit. E.g. 2.0→'2', 0.5→'/', 1.5→'3/2', 0.25→'/4'
+function beatsToABC(beats)
+
+// Export all three as window.Quantize = { quantizeTaps, buildGrid, beatsToABC }
+```
+
+---
+
+## renderer.js — abcjs score renderer
+
+```js
+class ScoreRenderer {
+  // containerId: id of a <div> in the DOM to render into
+  constructor(containerId)
+
+  // Render ABC text into the container using abcjs.
+  // Options: { responsive: true }
+  render(abcText)
+
+  // Clear the rendered score
+  clear()
+
+  // Highlight a specific note by 0-based index (for playback cursor display).
+  // Uses abcjs cursor API if available, else CSS class.
+  highlightNote(index)
+
+  // Remove highlight
+  clearHighlight()
+}
+
+// Export as window.ScoreRenderer
+// Depends on: abcjs loaded via CDN <script> before this file
+// abcjs CDN: https://cdn.jsdelivr.net/npm/abcjs@6.4.3/dist/abcjs-basic-min.js
+```
+
+---
+
+## abc-rhythm.js (existing, to be updated by coordinator)
+
+Main app controller. Imports and coordinates all modules.
+Handles the performance UI state machine:
+  idle → configured → countdown → recording → reviewing → done
+
+---
+
+## Shared conventions
+
+- `L:1/4` is the default note unit in all output ABC (quarter note = 1 beat)
+- All timestamps in milliseconds (Date.now())
+- AudioContext timing in seconds (Web Audio API standard)
+- Note indices are 0-based throughout
