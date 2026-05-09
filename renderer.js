@@ -30,9 +30,32 @@
         box-sizing: border-box;
       }
 
-      /* Note highlight — override abcjs fill color */
-      .abcjs-note.highlighted {
-        fill: #7c6af7 !important;
+      /* Force the rendered score to stay high-contrast regardless of app theme. */
+      .score-renderer-container svg {
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .score-renderer-container svg text,
+      .score-renderer-container svg path {
+        fill: #000000 !important;
+      }
+
+      .score-renderer-container svg path,
+      .score-renderer-container svg line,
+      .score-renderer-container svg polyline {
+        stroke: #000000 !important;
+      }
+
+      /* Playback highlight — red is distinct from the base black score. */
+      .score-renderer-container .abcjs-note.highlighted,
+      .score-renderer-container .abcjs-note.highlighted * {
+        fill: #d00000 !important;
+        stroke: #d00000 !important;
+      }
+
+      .score-renderer-container .abcjs-note.highlighted {
+        filter: drop-shadow(0 0 2px rgba(208, 0, 0, 0.75));
       }
     `;
     document.head.appendChild(style);
