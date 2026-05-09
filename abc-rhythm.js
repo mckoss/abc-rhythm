@@ -29,6 +29,7 @@ const app = {
   beatIdx: 0,
   isScorePlaying: false,
   scorePlaybackPreviousRedoDisabled: true,
+  selectedScoreTab: 'score',
 };
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,7 @@ function advanceActiveChip(newIdx) {
 function onStateChange() {
   // Update score live
   renderer.render(state.toABC());
+  applyScoreTabVisibility();
 
   // Update duration labels on chips
   state.notes.forEach(note => {
@@ -194,6 +196,7 @@ function loadABC() {
   app.phase = 'loaded';
   renderNoteStrip();
   renderer.render(state.toABC());
+  applyScoreTabVisibility();
   elOutputAbc.value = state.toABC();
 
   elStartBtn.disabled = false;
@@ -535,16 +538,26 @@ function setStatus(msg, cls) {
 // ---------------------------------------------------------------------------
 // Score tabs
 // ---------------------------------------------------------------------------
+function applyScoreTabVisibility() {
+  const selected = app.selectedScoreTab;
+
+  document.querySelectorAll('.score-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.tab === selected);
+  });
+
+  $('score-container').style.display = selected === 'score' ? '' : 'none';
+  $('abc-output-panel').style.display = selected === 'abc' ? '' : 'none';
+}
+
 function initTabs() {
   document.querySelectorAll('.score-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.score-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const which = tab.dataset.tab;
-      $('score-container').style.display = which === 'score' ? '' : 'none';
-      $('abc-output-panel').style.display = which === 'abc' ? '' : 'none';
+      app.selectedScoreTab = tab.dataset.tab;
+      applyScoreTabVisibility();
     });
   });
+
+  applyScoreTabVisibility();
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
     app.tapTimes = [];
     clickTrack.stop();
     renderer.clear();
+    applyScoreTabVisibility();
     renderNoteStrip();
     elStartBtn.disabled = true;
     elPlayScoreBtn.disabled = true;
