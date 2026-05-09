@@ -79,6 +79,33 @@
     return isNaN(n) ? null : n;
   }
 
+  /** Parse an ABC duration suffix into a multiplier of L:. */
+  function parseDurationMultiplier(durationABC) {
+    if (!durationABC) return 1;
+    const d = String(durationABC).trim();
+    if (!d) return 1;
+    if (d === '/') return 0.5;
+    const fraction = d.match(/^(\d*)\/(\d*)$/);
+    if (fraction) {
+      const numerator = fraction[1] ? parseInt(fraction[1], 10) : 1;
+      const denominator = fraction[2] ? parseInt(fraction[2], 10) : 2;
+      return denominator ? numerator / denominator : 1;
+    }
+    const n = parseFloat(d);
+    return isNaN(n) ? 1 : n;
+  }
+
+  /** Convert a note/rest token duration into quarter-note beats. */
+  function tokenBeats(tok, unitLength) {
+    const unit = unitLength || 1 / 4;
+    return parseDurationMultiplier(tok.durationABC) * unit * 4;
+  }
+
+  /** Existing body barlines are replaced by generated measure bars. */
+  function stripExistingBars(raw) {
+    return raw.replace(/[|:]+/g, '');
+  }
+
   /** Parse Q: value → bpm number (e.g. 'Q:1/4=120' → 120, 'Q:120' → 120). */
   function parseTempo(qValue) {
     if (!qValue) return null;
@@ -581,20 +608,47 @@
      * @returns {string}
      */
     toABC() {
-      return this._tokens.map(tok => {
+      let beatsPerMeasure = this.beatsPerMeasure || 4;
+      let unitLength = this.unitNoteLength || 1 / 4;
+      let measureBeats = 0;
+      let hasBodyNotes = false;
+
+      const out = [];
+      const EPSILON = 0.001;
+
+      const appendMeasured = (text, beats) => {
+        out.push(text);
+        hasBodyNotes = true;
+        measureBeats += beats;
+
+        while (beatsPerMeasure && measureBeats >= beatsPerMeasure - EPSILON) {
+          out.push('|');
+          measureBeats -= beatsPerMeasure;
+        }
+      };
+
+      for (const tok of this._tokens) {
         if (tok.type === 'note') {
-          // accidental + pitch + octave + duration
-          return tok.accidental + tok.pitch + tok.octave + tok.durationABC;
+          appendMeasured(tok.accidental + tok.pitch + tok.octave + tok.durationABC, tokenBeats(tok, unitLength));
+        } else if (tok.type === 'rest' || tok.type === 'inserted-rest') {
+          appendMeasured('z' + tok.durationABC, tokenBeats(tok, unitLength));
+        } else if (tok.type === 'field-change') {
+          out.push(tok.raw);
+          if (tok.field === 'M') {
+            beatsPerMeasure = parseBeatsPerMeasure(tok.value) || beatsPerMeasure;
+            measureBeats = 0;
+          } else if (tok.field === 'L') {
+            unitLength = parseUnitNoteLength(tok.value) || unitLength;
+          }
+        } else if (tok.type === 'text' && hasBodyNotes) {
+          out.push(stripExistingBars(tok.raw));
+        } else {
+          // header and pre-body text — verbatim
+          out.push(tok.raw);
         }
-        if (tok.type === 'rest') {
-          return 'z' + tok.durationABC;
-        }
-        if (tok.type === 'inserted-rest') {
-          return 'z' + tok.durationABC;
-        }
-        // header, text, or field-change — verbatim
-        return tok.raw;
-      }).join('');
+      }
+
+      return out.join('');
     }
 
     // -------------------------------------------------------------------------
