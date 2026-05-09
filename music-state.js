@@ -534,6 +534,39 @@
       this._notify();
     }
 
+    /**
+     * Update the header tempo to match the active recording BPM.
+     * Rewrites the first header-level Q: field when present; otherwise inserts
+     * Q:1/4=<bpm> immediately before K: when possible, or after the last header.
+     *
+     * @param {number|string} bpm - quarter-note beats per minute
+     */
+    setHeaderTempo(bpm) {
+      const tempo = parseInt(bpm, 10);
+      if (!tempo || tempo <= 0) return;
+
+      const qLine = `Q:1/4=${tempo}\n`;
+      const existing = this._tokens.find(tok => tok.type === 'header' && tok.raw.startsWith('Q:'));
+      if (existing) {
+        existing.raw = qLine;
+        this._notify();
+        return;
+      }
+
+      const keyIdx = this._tokens.findIndex(tok => tok.type === 'header' && tok.raw.startsWith('K:'));
+      if (keyIdx !== -1) {
+        this._tokens.splice(keyIdx, 0, { type: 'header', raw: qLine });
+      } else {
+        let insertAt = 0;
+        while (insertAt < this._tokens.length && this._tokens[insertAt].type === 'header') {
+          insertAt++;
+        }
+        this._tokens.splice(insertAt, 0, { type: 'header', raw: qLine });
+      }
+
+      this._notify();
+    }
+
     // -------------------------------------------------------------------------
     // Serialization
     // -------------------------------------------------------------------------

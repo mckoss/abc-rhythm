@@ -451,6 +451,9 @@ function liveQuantize() {
 
 function finalizeQuantization() {
   liveQuantize();
+  if (typeof state.setHeaderTempo === 'function') {
+    state.setHeaderTempo(parseInt(elBpmSlider.value, 10));
+  }
 }
 
 // ---------------------------------------------------------------------------
