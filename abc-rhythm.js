@@ -404,7 +404,7 @@ function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
   return Quantize.beatsToABC(steps / multiplier);
 }
 
-function quantizeHeldMsToABC(ms, bpm, resolution) {
+function quantizePerformedMsToABC(ms, bpm, resolution) {
   const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
   const beatMs = 60000 / bpm;
   const gridMs = beatMs / multiplier;
@@ -413,25 +413,36 @@ function quantizeHeldMsToABC(ms, bpm, resolution) {
     return Quantize.beatsToABC(1 / multiplier);
   }
 
-  // For held-note recording, err slightly long rather than short. Human key
-  // releases often land just before the next click/grid boundary; treating a
-  // near-quarter hold as an eighth feels much worse than rounding it up.
+  // This input mode is closer to conducting the rhythm than measuring exact
+  // key contact time. Be forgiving of early releases/late presses: a note that
+  // is close to a beat should stay a quarter, and a phrase-ending note that is
+  // close to two beats should become a half, not a dotted quarter plus a rest.
   const UNDERSHOOT_TOLERANCE_STEPS = 0.35;
-  const steps = Math.max(1, Math.ceil((ms / gridMs) - UNDERSHOOT_TOLERANCE_STEPS));
+  let steps = Math.max(1, Math.ceil((ms / gridMs) - UNDERSHOOT_TOLERANCE_STEPS));
+
+  // Once a duration reaches one full beat, prefer whole-beat durations for this
+  // hold/onset recorder. That avoids accidental dotted quarters when the player
+  // intended a half-note phrase ending.
+  if (steps >= multiplier && steps % multiplier !== 0) {
+    steps += multiplier - (steps % multiplier);
+  }
+
   return Quantize.beatsToABC(steps / multiplier);
 }
 
 function quantizeHoldsToGrid(holds, bpm, resolution) {
-  const durations = holds.map(h => quantizeHeldMsToABC(h.up - h.down, bpm, resolution));
-  const restsAfter = holds.map(() => null);
+  const durations = holds.map((h, i) => {
+    const next = holds[i + 1];
+    // For every note except the last, note-to-note onset spacing is the musical
+    // duration. This absorbs normal detached playing gaps instead of emitting
+    // spurious rests or shortening notes.
+    const ms = next ? next.down - h.down : h.up - h.down;
+    return quantizePerformedMsToABC(ms, bpm, resolution);
+  });
 
-  // Rests are generated from actual silence between held notes. Keep these
-  // neutral: short gaps below the selected resolution disappear; longer gaps
-  // round to the nearest rest duration.
-  for (let i = 0; i < holds.length - 1; i++) {
-    const gapMs = holds[i + 1].down - holds[i].up;
-    restsAfter[i] = quantizeMsToABC(gapMs, bpm, resolution, { allowZero: true });
-  }
+  // Do not infer rests from ordinary key-up/key-down gaps. With this recorder,
+  // the next onset defines the previous note's duration.
+  const restsAfter = holds.map(() => null);
 
   return { durations, restsAfter };
 }
@@ -441,8 +452,8 @@ function liveQuantize() {
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
 
-  // Quantize actual hold lengths, biased slightly upward so near-boundary key
-  // releases do not turn intended quarter notes into eighth notes.
+  // Quantize from note-to-note onset spacing, not just key contact time, so
+  // detached playing does not turn intended quarters into eighths plus rests.
   const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution);
 
   if (typeof state.setAllDurationsAndInsertedRests === 'function') {
