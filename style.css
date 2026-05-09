@@ -35,6 +35,7 @@ header {
   gap: 1rem;
 }
 header h1 { font-size: 1.3rem; font-weight: 700; color: var(--accent-hi); letter-spacing: -0.3px; }
+.app-version { font-size: 0.62rem; font-weight: 600; color: var(--muted); letter-spacing: 0; vertical-align: baseline; }
 header p  { font-size: 0.8rem; color: var(--muted); }
 
 /* ── Layout ── */
