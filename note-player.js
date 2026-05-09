@@ -6,6 +6,7 @@
  *   2. Hold-until-release: startNote() + stopCurrentNote() — used for tap-feedback
  *      where the note sustains at constant gain until the key is released, then
  *      applies a 20 ms release ramp to prevent clicks.
+ *   3. Sequence: playSequence() — schedules a parsed MusicState note/rest list.
  *
  * ABC pitch notation:
  *   pitch      — single letter, uppercase = octave 4, lowercase = octave 5
@@ -16,6 +17,7 @@
  *   const np = new NotePlayer();
  *   // Sequence playback — duration known up front:
  *   np.playNote('G', '', '', 500);
+ *   np.playSequence(musicState, { bpm: 100 });
  *   // Tap-feedback — key held:
  *   const audioStartTime = await np.startNote('A', '^', "'");
  *   const { startTime, endTime, durationMs } = np.stopCurrentNote();
@@ -30,6 +32,11 @@ class NotePlayer {
     this._currentGain       = null;
     this._startAudioTime    = 0;   // AudioContext seconds
     this._startWallTime     = 0;   // Date.now() ms
+
+    // Sequence playback state
+    this._scheduledVoices = new Set();
+    this._sequenceTimers  = new Set();
+    this._sequenceToken   = 0;
 
     this._lastNoteDurationMs = 0;
   }
@@ -57,31 +64,109 @@ class NotePlayer {
    */
   async playNote(pitch, accidental, octave, durationMs) {
     await this._ensureContext();
+    this._scheduleNote(pitch, accidental, octave, this._audioCtx.currentTime, durationMs);
+  }
 
-    const freq = this._noteToFrequency(pitch, accidental, octave);
-    const ctx  = this._audioCtx;
-    const now  = ctx.currentTime;
-    const dur  = Math.max(durationMs, 40) / 1000;  // at least 40 ms
-    const RELEASE = 0.020;
+  // ── playSequence — schedule parsed ABC notes/rests ────────────────────────
 
-    const osc  = ctx.createOscillator();
-    const gain = ctx.createGain();
+  /**
+   * Schedule sequential playback from a MusicState instance or notes array.
+   * Rests advance time without sound. Already-scheduled sequence playback is
+   * cancelled before the new sequence is queued.
+   *
+   * @param {MusicState|Array<Object>} source - MusicState or state.notes-style array
+   * @param {object} opts
+   * @param {number} opts.bpm - Tempo in quarter-note beats per minute
+   * @param {number} [opts.unitNoteLength] - ABC L: value as a fraction (default 1/4)
+   * @param {number} [opts.startDelayMs=30] - Small scheduling lead time
+   * @param {Function} [opts.onNote] - Called as each token starts: (note, index) => void
+   * @param {Function} [opts.onEnd] - Called after the sequence finishes
+   * @returns {Promise<{durationMs:number, noteCount:number}>}
+   */
+  async playSequence(source, opts = {}) {
+    await this._ensureContext();
+    this.stopAll();
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, now);
+    const token = this._sequenceToken;
+    const notes = Array.isArray(source) ? source : (source && source.notes) || [];
+    const bpm = Number(opts.bpm || (source && source.tempo) || 120);
+    const startDelayMs = opts.startDelayMs == null ? 30 : Number(opts.startDelayMs);
 
-    gain.gain.setValueAtTime(0.4, now);
-    // Hold at constant gain, then ramp down 20 ms before end
-    gain.gain.setValueAtTime(0.4, now + dur - RELEASE);
-    gain.gain.linearRampToValueAtTime(0, now + dur);
+    if (!notes.length || !bpm || bpm <= 0) {
+      return { durationMs: 0, noteCount: 0 };
+    }
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
+    const ctx = this._audioCtx;
+    let when = ctx.currentTime + Math.max(0, startDelayMs) / 1000;
+    let totalMs = 0;
 
-    osc.start(now);
-    osc.stop(now + dur + 0.005);
+    notes.forEach((note, sequenceIndex) => {
+      const context = (source && typeof source.getContextAtNote === 'function')
+        ? source.getContextAtNote(note.index)
+        : null;
+      const unitNoteLength = context?.unitLength || opts.unitNoteLength || 1 / 4;
+      const noteBpm = context?.tempo || bpm;
+      const durationMs = this._durationABCToMs(note.durationABC || '', noteBpm, unitNoteLength);
 
-    osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+      if (note.type === 'note') {
+        this._scheduleNote(
+          note.pitch,
+          note.accidental || '',
+          note.octave || '',
+          when,
+          durationMs,
+        );
+      }
+
+      if (typeof opts.onNote === 'function') {
+        const delayMs = Math.max(0, (when - ctx.currentTime) * 1000);
+        const timer = setTimeout(() => {
+          this._sequenceTimers.delete(timer);
+          if (this._sequenceToken === token) opts.onNote(note, sequenceIndex);
+        }, delayMs);
+        this._sequenceTimers.add(timer);
+      }
+
+      when += durationMs / 1000;
+      totalMs += durationMs;
+    });
+
+    if (typeof opts.onEnd === 'function') {
+      const timer = setTimeout(() => {
+        this._sequenceTimers.delete(timer);
+        if (this._sequenceToken === token) opts.onEnd();
+      }, Math.max(0, totalMs + startDelayMs));
+      this._sequenceTimers.add(timer);
+    }
+
+    return { durationMs: totalMs, noteCount: notes.length };
+  }
+
+  /**
+   * Stop any held note and cancel all scheduled sequence playback.
+   */
+  stopAll() {
+    this._sequenceToken++;
+
+    for (const timer of this._sequenceTimers) {
+      clearTimeout(timer);
+    }
+    this._sequenceTimers.clear();
+
+    for (const voice of this._scheduledVoices) {
+      try {
+        voice.gain.gain.cancelScheduledValues(0);
+        voice.gain.gain.value = 0;
+        voice.osc.stop(0);
+      } catch (_) {
+        // Voice may already have ended or not have started yet.
+      }
+      try { voice.osc.disconnect(); } catch (_) {}
+      try { voice.gain.disconnect(); } catch (_) {}
+    }
+    this._scheduledVoices.clear();
+
+    this._silenceCurrent();
   }
 
   // ── startNote — holds until stopCurrentNote() ─────────────────────────────
@@ -179,6 +264,40 @@ class NotePlayer {
   }
 
   /**
+   * Schedule one oscillator voice at an AudioContext time.
+   */
+  _scheduleNote(pitch, accidental, octave, startTime, durationMs) {
+    const freq = this._noteToFrequency(pitch, accidental, octave);
+    const ctx  = this._audioCtx;
+    const dur  = Math.max(Number(durationMs) || 0, 40) / 1000;  // at least 40 ms
+    const RELEASE = Math.min(0.020, dur / 2);
+
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const voice = { osc, gain };
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, startTime);
+
+    gain.gain.setValueAtTime(0.4, startTime);
+    gain.gain.setValueAtTime(0.4, startTime + dur - RELEASE);
+    gain.gain.linearRampToValueAtTime(0, startTime + dur);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    this._scheduledVoices.add(voice);
+    osc.onended = () => {
+      this._scheduledVoices.delete(voice);
+      try { osc.disconnect(); } catch (_) {}
+      try { gain.disconnect(); } catch (_) {}
+    };
+
+    osc.start(startTime);
+    osc.stop(startTime + dur + 0.005);
+  }
+
+  /**
    * Immediately stop any held note without recording duration (used internally
    * when a new startNote() pre-empts an un-stopped note).
    */
@@ -197,6 +316,37 @@ class NotePlayer {
     }
     this._currentOscillator = null;
     this._currentGain       = null;
+  }
+
+  /**
+   * Convert an ABC duration suffix into milliseconds.
+   * The suffix multiplies the active L: unit length. With L:1/4, '' is one
+   * quarter-note beat, '2' is two beats, '/' or '/2' is half a beat, etc.
+   */
+  _durationABCToMs(durationABC, bpm, unitNoteLength = 1 / 4) {
+    const multiplier = this._parseABCDurationMultiplier(durationABC);
+    const quarterBeats = multiplier * (unitNoteLength / (1 / 4));
+    return quarterBeats * (60000 / bpm);
+  }
+
+  /**
+   * Parse ABC duration syntax as a multiplier of L:.
+   */
+  _parseABCDurationMultiplier(durationABC) {
+    const text = String(durationABC || '').trim();
+    if (!text) return 1;
+
+    if (/^\d+$/.test(text)) return parseInt(text, 10);
+
+    const fraction = text.match(/^(\d*)\/(\d*)$/);
+    if (fraction) {
+      const numerator = fraction[1] ? parseInt(fraction[1], 10) : 1;
+      const denominator = fraction[2] ? parseInt(fraction[2], 10) : 2;
+      return numerator / denominator;
+    }
+
+    // Conservative fallback: malformed/unsupported duration plays as unit L:.
+    return 1;
   }
 
   /**
@@ -219,23 +369,25 @@ class NotePlayer {
     const letter   = pitch.toLowerCase();
     let semitone   = NOTE_SEMITONES[letter] ?? 0;
 
-    // Accidentals
+    // Accidentals from MusicState are stored on note.accidental and passed
+    // through directly: '^', '^^', '_', '__', '=', or ''.
     if      (accidental === '^^') semitone += 2;
     else if (accidental === '^')  semitone += 1;
     else if (accidental === '__') semitone -= 2;
     else if (accidental === '_')  semitone -= 1;
     // '=' (natural) and '' → no change
 
-    // Base octave: uppercase → 4, lowercase → 5
+    // Base octave: uppercase → 4, lowercase → 5.
     let octaveNum = /[A-Z]/.test(pitch) ? 4 : 5;
 
-    // Apply explicit octave modifiers
+    // Apply explicit octave modifiers.
     if (octave) {
       octaveNum += (octave.match(/'/g) || []).length;
       octaveNum -= (octave.match(/,/g)  || []).length;
     }
 
-    // MIDI note: C4 = 60, A4 = 69 = 440 Hz
+    // MIDI note formula: C4 = 12 * (4 + 1) + 0 = 60 → 261.63 Hz;
+    // A4 = 12 * (4 + 1) + 9 = 69 → 440 Hz.
     const midi = 12 * (octaveNum + 1) + semitone;
     return 440 * Math.pow(2, (midi - 69) / 12);
   }

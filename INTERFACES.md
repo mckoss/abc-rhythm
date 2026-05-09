@@ -114,6 +114,14 @@ class NotePlayer {
   //   durationMs — sustain duration before release begins
   async playNote(pitch, accidental, octave, durationMs)
 
+  // Schedule sequential playback from a MusicState instance or a state.notes-style
+  // note/rest array. Rests advance time without sound. Cancels any previous
+  // sequence first. opts: { bpm, unitNoteLength, startDelayMs, onNote, onEnd }
+  async playSequence(source, opts)  // → { durationMs, noteCount }
+
+  // Stop any held note and cancel all scheduled sequence playback.
+  stopAll()
+
   // ── Hold-until-release playback (tap feedback) ────────────────────────────
 
   // Called on spacebar keydown — starts the note, holds it at constant gain
