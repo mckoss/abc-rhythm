@@ -404,44 +404,42 @@ function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
   return Quantize.beatsToABC(steps / multiplier);
 }
 
-function quantizePerformedMsToABC(ms, bpm, resolution) {
+function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
   const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
   const beatMs = 60000 / bpm;
   const gridMs = beatMs / multiplier;
 
-  if (!ms || ms <= 0 || !bpm || bpm <= 0 || gridMs <= 0) {
-    return Quantize.beatsToABC(1 / multiplier);
+  if (!holds.length || !bpm || bpm <= 0 || !startTime || gridMs <= 0) {
+    return {
+      durations: holds.map(h => quantizeMsToABC(h.up - h.down, bpm, resolution)),
+      restsAfter: holds.map(() => null),
+    };
   }
 
-  // This input mode is closer to conducting the rhythm than measuring exact
-  // key contact time. Be forgiving of early releases/late presses: a note that
-  // is close to a beat should stay a quarter, and a phrase-ending note that is
-  // close to two beats should become a half, not a dotted quarter plus a rest.
-  const UNDERSHOOT_TOLERANCE_STEPS = 0.35;
-  let steps = Math.max(1, Math.ceil((ms / gridMs) - UNDERSHOOT_TOLERANCE_STEPS));
+  const rawStep = (time) => (time - startTime) / gridMs;
+  const snapStartStep = (time) => Math.max(0, Math.round(rawStep(time)));
 
-  // Once a duration reaches one full beat, prefer whole-beat durations for this
-  // hold/onset recorder. That avoids accidental dotted quarters when the player
-  // intended a half-note phrase ending.
-  if (steps >= multiplier && steps % multiplier !== 0) {
-    steps += multiplier - (steps % multiplier);
+  // Releases are articulation and are usually early. Let a key-up count as if
+  // it happened up to half a quantization interval later, then snap to grid.
+  const RELEASE_LENIENCY_STEPS = 0.5;
+  const snapReleaseStep = (time) => Math.max(0, Math.round(rawStep(time) + RELEASE_LENIENCY_STEPS));
+
+  const starts = holds.map(h => snapStartStep(h.down));
+  for (let i = 1; i < starts.length; i++) {
+    if (starts[i] <= starts[i - 1]) starts[i] = starts[i - 1] + 1;
   }
 
-  return Quantize.beatsToABC(steps / multiplier);
-}
-
-function quantizeHoldsToGrid(holds, bpm, resolution) {
   const durations = holds.map((h, i) => {
-    const next = holds[i + 1];
-    // For every note except the last, note-to-note onset spacing is the musical
-    // duration. This absorbs normal detached playing gaps instead of emitting
-    // spurious rests or shortening notes.
-    const ms = next ? next.down - h.down : h.up - h.down;
-    return quantizePerformedMsToABC(ms, bpm, resolution);
+    const startStep = starts[i];
+    const endStep = (i + 1 < starts.length)
+      ? starts[i + 1]
+      : Math.max(startStep + 1, snapReleaseStep(h.up));
+    const durationSteps = Math.max(1, endStep - startStep);
+    return Quantize.beatsToABC(durationSteps / multiplier);
   });
 
   // Do not infer rests from ordinary key-up/key-down gaps. With this recorder,
-  // the next onset defines the previous note's duration.
+  // snapped note starts define the previous note's duration.
   const restsAfter = holds.map(() => null);
 
   return { durations, restsAfter };
@@ -452,9 +450,10 @@ function liveQuantize() {
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
 
-  // Quantize from note-to-note onset spacing, not just key contact time, so
-  // detached playing does not turn intended quarters into eighths plus rests.
-  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution);
+  // Quantize note starts to the click grid and derive durations from snapped
+  // starts. Releases get extra leniency because they are articulation, not the
+  // primary rhythmic event.
+  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution, app.recordingStartTime);
 
   if (typeof state.setAllDurationsAndInsertedRests === 'function') {
     state.setAllDurationsAndInsertedRests(durations, restsAfter);
