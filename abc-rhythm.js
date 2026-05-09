@@ -27,6 +27,8 @@ const app = {
   recordingStartTime: 0,
   currentNoteIdx: 0,
   beatIdx: 0,
+  isScorePlaying: false,
+  scorePlaybackPreviousRedoDisabled: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -34,7 +36,7 @@ const app = {
 // ---------------------------------------------------------------------------
 const $ = id => document.getElementById(id);
 let elInputAbc, elOutputAbc, elNoteStrip, elTapBtn, elTransportStatus,
-    elStartBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
+    elStartBtn, elPlayScoreBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
     elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel, elBpmSource,
     elTimeSigDisplay, elResolution, elCountIn, elSubdivision;
 
@@ -163,6 +165,8 @@ function onStateChange() {
 // Loading ABC
 // ---------------------------------------------------------------------------
 function loadABC() {
+  if (app.isScorePlaying) stopScorePlayback();
+
   const text = elInputAbc.value.trim();
   if (!text) return;
 
@@ -194,6 +198,7 @@ function loadABC() {
   elOutputAbc.value = state.toABC();
 
   elStartBtn.disabled = false;
+  elPlayScoreBtn.disabled = false;
   elClearBtn.disabled = false;
   elRedoBtn.disabled = true;
   elCopyBtn.disabled = false;
@@ -206,6 +211,7 @@ function loadABC() {
 // ---------------------------------------------------------------------------
 function startSession() {
   if (app.phase === 'idle' || state.noteCount === 0) return;
+  if (app.isScorePlaying) stopScorePlayback();
 
   const s = getSettings();
   const beatsPerMeasure = parseTimeSig(s.timeSig);
@@ -229,6 +235,7 @@ function startSession() {
 
   // UI
   elStartBtn.disabled = true;
+  elPlayScoreBtn.disabled = true;
   elStopBtn.disabled = false;
   elTapBtn.disabled = app.phase === 'countdown'; // can't tap during count-in
   elTapBtn.className = 'tap-btn' + (app.phase === 'recording' ? ' recording' : '');
@@ -239,8 +246,8 @@ function startSession() {
     setStatus(`Count-in: ${totalCountInBeats} beats…`, '');
     elTapBtn.textContent = 'Waiting for count-in…';
   } else {
-    setStatus(`Recording — tap for each note! (${state.noteCount} notes)`, 'recording');
-    elTapBtn.textContent = `TAP — Note 1 of ${state.noteCount}`;
+    setStatus(`Recording — hold Shift (or tap) for each note! (${state.noteCount} notes)`, 'recording');
+    elTapBtn.textContent = `SHIFT/TAP — Note 1 of ${state.noteCount}`;
   }
 }
 
@@ -251,10 +258,11 @@ function stopSession() {
   app.phase = app.holds.length > 0 ? 'reviewing' : 'loaded';
   elStopBtn.disabled = true;
   elStartBtn.disabled = false;
+  elPlayScoreBtn.disabled = false;
   elRedoBtn.disabled = false;
   elTapBtn.disabled = true;
   elTapBtn.className = 'tap-btn';
-  elTapBtn.textContent = 'SPACEBAR  /  TAP';
+  elTapBtn.textContent = 'SHIFT  /  TAP';
   document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
 
   if (app.holds.length >= 1) {
@@ -273,8 +281,9 @@ function redoSession() {
   app.noteDown = null;
   app.currentNoteIdx = 0;
   elRedoBtn.disabled = true;
+  elPlayScoreBtn.disabled = false;
   elTapBtn.disabled = true;
-  elTapBtn.textContent = 'SPACEBAR  /  TAP';
+  elTapBtn.textContent = 'SHIFT  /  TAP';
   renderNoteStrip();
   setStatus(`${state.noteCount} notes ready. Press Start.`, 'ready');
 }
@@ -299,8 +308,8 @@ function onTick({ beat, subdiv, isMeasureStart, isBeatStart }) {
       app.recordingStartTime = Date.now();
       elTapBtn.disabled = false;
       elTapBtn.className = 'tap-btn recording';
-      elTapBtn.textContent = `TAP — Note 1 of ${state.noteCount}`;
-      setStatus(`Recording — tap for each note!`, 'recording');
+      elTapBtn.textContent = `SHIFT/TAP — Note 1 of ${state.noteCount}`;
+      setStatus(`Recording — hold Shift (or tap) for each note!`, 'recording');
     } else {
       setStatus(`Count-in: ${app.countInBeatsLeft} beats…`, '');
     }
@@ -356,7 +365,7 @@ function onNoteKeyUp() {
   }
 
   const remaining = state.noteCount - app.currentNoteIdx;
-  elTapBtn.textContent = `TAP — Note ${app.currentNoteIdx + 1} of ${state.noteCount}`;
+  elTapBtn.textContent = `SHIFT/TAP — Note ${app.currentNoteIdx + 1} of ${state.noteCount}`;
   setStatus(`${remaining} note${remaining !== 1 ? 's' : ''} remaining.`, 'recording');
 }
 
@@ -388,6 +397,70 @@ function liveQuantize() {
 
 function finalizeQuantization() {
   liveQuantize();
+}
+
+// ---------------------------------------------------------------------------
+// Score playback (plays loaded ABC exactly as parsed; no recording/quantizing)
+// ---------------------------------------------------------------------------
+function canPlayScore() {
+  return state && state.noteCount > 0 && (app.phase === 'loaded' || app.phase === 'reviewing');
+}
+
+function startScorePlayback() {
+  if (!canPlayScore() || app.isScorePlaying) return;
+
+  app.isScorePlaying = true;
+  app.scorePlaybackPreviousRedoDisabled = elRedoBtn.disabled;
+  elPlayScoreBtn.textContent = '■ Stop Playback';
+  elPlayScoreBtn.disabled = false;
+  elStartBtn.disabled = true;
+  elStopBtn.disabled = true;
+  elRedoBtn.disabled = true;
+  elTapBtn.disabled = true;
+
+  const bpm = state.tempo || parseInt(elBpmSlider.value, 10);
+  setStatus('Playing score…', 'ready');
+
+  notePlayer.playSequence(state, {
+    bpm,
+    unitNoteLength: state.unitNoteLength || 1 / 4,
+    onNote: (note) => {
+      if (renderer && typeof renderer.highlightNote === 'function') {
+        renderer.highlightNote(note.index);
+      }
+    },
+    onEnd: () => {
+      stopScorePlayback({ ended: true });
+    },
+  }).catch((err) => {
+    console.error('[ScorePlayback] Failed to play score:', err);
+    stopScorePlayback();
+    setStatus('Could not play score — check browser audio permissions.', '');
+  });
+}
+
+function stopScorePlayback({ ended = false } = {}) {
+  if (!app.isScorePlaying && !ended) return;
+
+  notePlayer.stopAll();
+  app.isScorePlaying = false;
+  elPlayScoreBtn.textContent = '▶ Play Score';
+  elPlayScoreBtn.disabled = !canPlayScore();
+  elStartBtn.disabled = app.phase === 'idle' || state.noteCount === 0;
+  elStopBtn.disabled = true;
+  elRedoBtn.disabled = app.scorePlaybackPreviousRedoDisabled;
+  if (renderer && typeof renderer.clearHighlight === 'function') {
+    renderer.clearHighlight();
+  }
+
+  if (canPlayScore()) {
+    setStatus(ended ? 'Playback finished.' : 'Playback stopped.', 'ready');
+  }
+}
+
+function toggleScorePlayback() {
+  if (app.isScorePlaying) stopScorePlayback();
+  else startScorePlayback();
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
   elTapBtn         = $('tap-btn');
   elTransportStatus= $('transport-status');
   elStartBtn       = $('start-btn');
+  elPlayScoreBtn   = $('play-score-btn');
   elStopBtn        = $('stop-btn');
   elRedoBtn        = $('redo-btn');
   elCopyBtn        = $('copy-btn');
@@ -489,6 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadABC();
   });
   elClearBtn.addEventListener('click', () => {
+    stopScorePlayback();
     elInputAbc.value = '';
     elOutputAbc.value = '';
     state.parseABC('');
@@ -498,6 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderer.clear();
     renderNoteStrip();
     elStartBtn.disabled = true;
+    elPlayScoreBtn.disabled = true;
     elStopBtn.disabled = true;
     elRedoBtn.disabled = true;
     elCopyBtn.disabled = true;
@@ -506,17 +582,35 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('Load ABC to begin.', '');
   });
   elStartBtn.addEventListener('click', startSession);
+  elPlayScoreBtn.addEventListener('click', toggleScorePlayback);
   elStopBtn.addEventListener('click', stopSession);
   elRedoBtn.addEventListener('click', redoSession);
   elCopyBtn.addEventListener('click', copyABC);
   elTapBtn.addEventListener('click', recordTap);
 
-  // Spacebar
+  // Shift key hold timing. Mouse/touch still uses the tap button toggle.
+  const isTextEntryTarget = (target) => {
+    const tag = target && target.tagName;
+    return target && (
+      target.isContentEditable ||
+      tag === 'TEXTAREA' ||
+      tag === 'INPUT' ||
+      tag === 'SELECT'
+    );
+  };
+
   document.addEventListener('keydown', e => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      if (app.phase === 'recording') recordTap();
-    }
+    if (e.key !== 'Shift' || e.repeat || app.phase !== 'recording') return;
+    if (isTextEntryTarget(e.target)) return;
+    e.preventDefault();
+    onNoteKeyDown();
+  });
+
+  document.addEventListener('keyup', e => {
+    if (e.key !== 'Shift' || app.phase !== 'recording') return;
+    if (isTextEntryTarget(e.target) && app.noteDown === null) return;
+    e.preventDefault();
+    onNoteKeyUp();
   });
 
   // Score tabs

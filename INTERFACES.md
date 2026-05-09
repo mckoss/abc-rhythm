@@ -124,12 +124,12 @@ class NotePlayer {
 
   // ── Hold-until-release playback (tap feedback) ────────────────────────────
 
-  // Called on spacebar keydown — starts the note, holds it at constant gain
-  // indefinitely (no decay). If a note is already held, it is silenced first.
+  // Called on Shift keydown or tap-button press — starts the note, holds it at
+  // constant gain indefinitely (no decay). If a note is already held, it is silenced first.
   // Returns the AudioContext timestamp (seconds) when the note started.
   async startNote(pitch, accidental, octave)  // → number (audioCtx seconds)
 
-  // Called on spacebar keyup — applies a 20 ms release ramp and stops the note.
+  // Called on Shift keyup or tap-button release — applies a 20 ms release ramp and stops the note.
   // Returns wall-clock timings (ms, Date.now() scale).
   // Returns { startTime: 0, endTime: 0, durationMs: 0 } if no note was held.
   stopCurrentNote()  // → { startTime, endTime, durationMs }

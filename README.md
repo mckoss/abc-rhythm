@@ -2,7 +2,7 @@
 
 **Tap your way from a melody to a scored piece.**
 
-`abc-rhythm` is a browser-based tool that takes an [ABC notation](https://abcnotation.com/) file — notes with no durations — and lets you tap the spacebar in time to assign real rhythmic values to each note. The result is a fully annotated ABC file ready for import into MuseScore, EasyABC, or any ABC-compatible tool.
+`abc-rhythm` is a browser-based tool that takes an [ABC notation](https://abcnotation.com/) file — notes with no durations — and lets you hold Shift (or tap the button) in time to assign real rhythmic values to each note. The result is a fully annotated ABC file ready for import into MuseScore, EasyABC, or any ABC-compatible tool.
 
 ---
 
@@ -10,7 +10,7 @@
 
 If you keep a **fake book** or melody sketchpad where you jot down note sequences without worrying about exact timing — just the pitches — you know the rhythm in your head but getting it into a notation program means fighting an interactive editor note by note.
 
-`abc-rhythm` flips that: you write the notes as plain ABC text, then *play* the melody by tapping the spacebar. The tool measures your tap intervals, quantizes them to standard note values, and writes the durations back into the ABC.
+`abc-rhythm` flips that: you write the notes as plain ABC text, then *play* the melody by holding Shift (or tapping the button). The tool measures your holds, quantizes them to standard note values, and writes the durations back into the ABC.
 
 **Input:**
 ```abc
@@ -22,7 +22,7 @@ K:C
 CDEC CDEC EFGF EFG z|
 ```
 
-**Tap through it** in rhythm — the app times each tap — then get back:
+**Hold/tap through it** in rhythm — the app times each hold — then get back:
 ```abc
 X:1
 T:My Tune
@@ -38,9 +38,9 @@ C D E2 C D E2 E F G2 E F G2 z2|
 
 1. **Open `index.html`** in any modern browser (no server needed, no install).
 2. **Paste your ABC notation** into the left panel. Notes without durations are fine — existing durations will be replaced.
-3. Click **Start Tapping** (or press Enter).
-4. The notes scroll by one at a time. **Press Spacebar** (or tap the screen) each time the next note should sound.
-5. Press Spacebar one final time to mark the end of the last note.
+3. Click **Start**.
+4. The notes scroll by one at a time. **Hold Shift** (or tap the screen button) for each note duration.
+5. Release Shift (or tap again) to mark the end of the current note.
 6. The app quantizes your taps and shows the **annotated ABC** in the right panel.
 7. **Copy** or **Download** the result.
 
