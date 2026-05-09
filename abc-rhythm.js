@@ -429,18 +429,27 @@ function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
     if (starts[i] <= starts[i - 1]) starts[i] = starts[i - 1] + 1;
   }
 
-  const durations = holds.map((h, i) => {
-    const startStep = starts[i];
-    const endStep = (i + 1 < starts.length)
-      ? starts[i + 1]
-      : Math.max(startStep + 1, snapReleaseStep(h.up));
-    const durationSteps = Math.max(1, endStep - startStep);
-    return Quantize.beatsToABC(durationSteps / multiplier);
-  });
-
-  // Do not infer rests from ordinary key-up/key-down gaps. With this recorder,
-  // snapped note starts define the previous note's duration.
+  const durations = [];
   const restsAfter = holds.map(() => null);
+
+  for (let i = 0; i < holds.length; i++) {
+    const startStep = starts[i];
+    const nextStartStep = (i + 1 < starts.length) ? starts[i + 1] : null;
+    let releaseStep = Math.max(startStep + 1, snapReleaseStep(holds[i].up));
+
+    if (nextStartStep != null) {
+      // If the release is close enough to the next note start, treat it as
+      // normal articulation and extend the note to that next onset. If it is
+      // clearly earlier, keep the shorter note and emit a rest for the gap.
+      releaseStep = Math.min(releaseStep, nextStartStep);
+      const endStep = releaseStep;
+      const restSteps = nextStartStep - endStep;
+      durations.push(Quantize.beatsToABC(Math.max(1, endStep - startStep) / multiplier));
+      if (restSteps > 0) restsAfter[i] = Quantize.beatsToABC(restSteps / multiplier);
+    } else {
+      durations.push(Quantize.beatsToABC(Math.max(1, releaseStep - startStep) / multiplier));
+    }
+  }
 
   return { durations, restsAfter };
 }
