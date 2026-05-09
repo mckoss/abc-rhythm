@@ -20,7 +20,7 @@ let notePlayer;  // NotePlayer
 // App state
 // ---------------------------------------------------------------------------
 const app = {
-  phase: 'idle',          // idle | loaded | countdown | recording | reviewing
+  phase: 'idle',          // idle | loaded | countdown | recording | reviewing | editing
   holds: [],              // { down, up } ms pairs — one per note
   noteDown: null,         // timestamp of current keydown (null when key is up)
   countInBeatsLeft: 0,
@@ -30,6 +30,7 @@ const app = {
   isScorePlaying: false,
   scorePlaybackPreviousRedoDisabled: true,
   selectedScoreTab: 'score',
+  editCursor: 0,          // note index currently under the edit cursor
 };
 
 // ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ const app = {
 // ---------------------------------------------------------------------------
 const $ = id => document.getElementById(id);
 let elInputAbc, elOutputAbc, elNoteStrip, elTapBtn, elTransportStatus,
-    elStartBtn, elPlayScoreBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
+    elStartBtn, elPlayScoreBtn, elStopBtn, elRedoBtn, elEditBtn, elCopyBtn, elClearBtn, elLoadBtn,
     elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel, elBpmSource,
     elTimeSigDisplay, elResolution, elCountIn;
 
@@ -118,11 +119,15 @@ function renderNoteStrip() {
     chip.appendChild(pitchEl);
     chip.appendChild(durEl);
 
-    if (app.phase === 'recording' || app.phase === 'reviewing') {
+    if (app.phase === 'recording') {
       if (tok.index < app.currentNoteIdx) chip.classList.add('done');
-      else if (tok.index === app.currentNoteIdx && app.phase === 'recording') chip.classList.add('active');
+      else if (tok.index === app.currentNoteIdx) chip.classList.add('active');
+    } else if (app.phase === 'reviewing') {
+      chip.classList.add('done');
+    } else if (app.phase === 'editing') {
+      if (tok.index === app.editCursor) chip.classList.add('cursor');
+      else if (tok.durationABC) chip.classList.add('done');
     }
-    if (app.phase === 'reviewing') chip.classList.add('done');
 
     elNoteStrip.appendChild(chip);
   });
@@ -203,9 +208,10 @@ function loadABC() {
   elPlayScoreBtn.disabled = false;
   elClearBtn.disabled = false;
   elRedoBtn.disabled = true;
+  elEditBtn.disabled = false;
   elCopyBtn.disabled = false;
 
-  setStatus(`${state.noteCount} notes loaded. Press Start to begin.`, 'ready');
+  setStatus(`${state.noteCount} notes loaded. Press Start or ✎ Edit.`, 'ready');
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +249,7 @@ function startSession() {
   elTapBtn.disabled = app.phase === 'countdown'; // can't tap during count-in
   elTapBtn.className = 'tap-btn' + (app.phase === 'recording' ? ' recording' : '');
   elRedoBtn.disabled = true;
+  elEditBtn.disabled = true;
   renderNoteStrip();
 
   if (app.phase === 'countdown') {
@@ -263,6 +270,7 @@ function stopSession() {
   elStartBtn.disabled = false;
   elPlayScoreBtn.disabled = false;
   elRedoBtn.disabled = false;
+  elEditBtn.disabled = false;
   elTapBtn.disabled = true;
   elTapBtn.className = 'tap-btn';
   elTapBtn.textContent = 'SHIFT  /  TAP';
@@ -284,6 +292,7 @@ function redoSession() {
   app.noteDown = null;
   app.currentNoteIdx = 0;
   elRedoBtn.disabled = true;
+  elEditBtn.disabled = false;
   elPlayScoreBtn.disabled = false;
   elTapBtn.disabled = true;
   elTapBtn.textContent = 'SHIFT  /  TAP';
@@ -479,6 +488,147 @@ function finalizeQuantization() {
 }
 
 // ---------------------------------------------------------------------------
+// Manual Duration Edit Mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Number-key → quarter-note beat count mapping.
+ * 1=quarter, 2=half, 3=dotted-half, 4=whole, 8=eighth, 6=sixteenth, 5=thirty-second
+ */
+const EDIT_KEY_BEATS = {
+  '1': 1,
+  '2': 2,
+  '3': 3,
+  '4': 4,
+  '8': 0.5,
+  '6': 0.25,
+  '5': 0.125,
+};
+
+/** Human-readable label for edit-mode duration keys. */
+const EDIT_KEY_LEGEND = '1=♩ 2=𝅗 3=𝅗. 4=𝅝 8=♪ 6=16th 5=32nd';
+
+function enterEditMode() {
+  if (state.noteCount === 0) return;
+  if (app.isScorePlaying) stopScorePlayback();
+
+  // Start cursor at first note without a duration, or note 0
+  const notes = state.notes;
+  const firstUnset = notes.find(n => !n.durationABC);
+  app.editCursor = firstUnset ? firstUnset.index : notes[0].index;
+
+  app.phase = 'editing';
+
+  elStartBtn.disabled = true;
+  elStopBtn.disabled = true;
+  elRedoBtn.disabled = true;
+  elPlayScoreBtn.disabled = false;
+  elEditBtn.textContent = '✓ Done';
+  elEditBtn.className = 'btn-primary';
+  elTapBtn.disabled = false;
+  elTapBtn.className = 'tap-btn';
+  elTapBtn.textContent = EDIT_KEY_LEGEND + '  ◄► navigate  Esc=done';
+
+  renderNoteStrip();
+  updateEditCursorUI();
+}
+
+function exitEditMode() {
+  const hasDurations = state.notes.some(n => n.durationABC);
+  app.phase = hasDurations ? 'reviewing' : 'loaded';
+
+  if (renderer) renderer.clearHighlight();
+
+  elStartBtn.disabled = false;
+  elPlayScoreBtn.disabled = false;
+  elStopBtn.disabled = true;
+  elRedoBtn.disabled = !hasDurations;
+  elEditBtn.textContent = '✎ Edit';
+  elEditBtn.className = 'btn-secondary';
+  elTapBtn.disabled = true;
+  elTapBtn.className = 'tap-btn';
+  elTapBtn.textContent = 'SHIFT  /  TAP';
+
+  renderNoteStrip();
+  setStatus(hasDurations ? 'Done — score updated.' : `${state.noteCount} notes ready. Press Start or Edit.`, 'ready');
+}
+
+function toggleEditMode() {
+  if (app.phase === 'editing') exitEditMode();
+  else if (app.phase === 'loaded' || app.phase === 'reviewing') enterEditMode();
+}
+
+/**
+ * Move the edit cursor by delta (+1 forward, -1 backward).
+ * Wraps at boundaries (stays at first/last note).
+ */
+function moveCursor(delta) {
+  const notes = state.notes;
+  if (!notes.length) return;
+  const currentPos = notes.findIndex(n => n.index === app.editCursor);
+  const newPos = Math.max(0, Math.min(notes.length - 1, currentPos + delta));
+  if (newPos === currentPos) return;
+  app.editCursor = notes[newPos].index;
+  updateEditCursorUI();
+}
+
+/**
+ * Assign an ABC duration to the note at the current edit cursor,
+ * play it as audio feedback, then advance the cursor.
+ */
+function assignDuration(beats) {
+  const abcDur = Quantize.beatsToABC(beats);
+  state.setDuration(app.editCursor, abcDur);  // triggers onStateChange (score re-render)
+
+  // Audio feedback
+  const note = state.notes.find(n => n.index === app.editCursor);
+  if (note && note.type === 'note') {
+    const bpm = parseInt(elBpmSlider.value, 10) || 100;
+    const durationMs = Math.min(beats * 60000 / bpm, 2000);
+    notePlayer.playNote(note.pitch, note.accidental || '', note.octave || '', durationMs);
+  }
+
+  // Advance or stay at end
+  const notes = state.notes;
+  const currentPos = notes.findIndex(n => n.index === app.editCursor);
+  if (currentPos < notes.length - 1) {
+    app.editCursor = notes[currentPos + 1].index;
+  }
+  // onStateChange re-renders the score SVG (clearing highlight); restore it
+  updateEditCursorUI();
+}
+
+/** Update chip highlight + score highlight + status for current edit cursor. */
+function updateEditCursorUI() {
+  // Chip: remove old cursor class, add to new
+  document.querySelectorAll('.note-chip.cursor').forEach(c => c.classList.remove('cursor'));
+  const chip = $(`chip-${app.editCursor}`);
+  if (chip) {
+    chip.classList.add('cursor');
+    chip.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }
+
+  // Score highlight
+  if (renderer) renderer.highlightNote(app.editCursor);
+
+  // Status
+  const notes = state.notes;
+  const pos = notes.findIndex(n => n.index === app.editCursor);
+  const note = notes[pos];
+  if (note) {
+    const label = note.type === 'rest'
+      ? 'z (rest)'
+      : (note.accidental || '') + note.pitch.toUpperCase() +
+        (note.octave || '').replace(/,/g, '↓').replace(/'/g, '↑');
+    const assigned = note.durationABC ? ` [${note.durationABC || '—'}]` : ' [unset]';
+    setStatus(
+      `Edit ${pos + 1}/${notes.length}: ${label}${assigned} — ${EDIT_KEY_LEGEND}  ◄► navigate  Esc=done`,
+      'ready'
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Score playback (plays loaded ABC exactly as parsed; no recording/quantizing)
 // ---------------------------------------------------------------------------
 function canPlayScore() {
@@ -495,6 +645,7 @@ function startScorePlayback() {
   elStartBtn.disabled = true;
   elStopBtn.disabled = true;
   elRedoBtn.disabled = true;
+  elEditBtn.disabled = true;
   elTapBtn.disabled = true;
 
   const bpm = state.tempo || parseInt(elBpmSlider.value, 10);
@@ -529,9 +680,10 @@ function stopScorePlayback({ ended = false } = {}) {
   app.isScorePlaying = false;
   elPlayScoreBtn.textContent = '▶ Play Score';
   elPlayScoreBtn.disabled = !canPlayScore();
-  elStartBtn.disabled = app.phase === 'idle' || state.noteCount === 0;
+  elStartBtn.disabled = app.phase === 'idle' || state.noteCount === 0 || app.phase === 'editing';
   elStopBtn.disabled = true;
-  elRedoBtn.disabled = app.scorePlaybackPreviousRedoDisabled;
+  elRedoBtn.disabled = app.scorePlaybackPreviousRedoDisabled || app.phase === 'editing';
+  elEditBtn.disabled = app.phase === 'idle' || state.noteCount === 0;
   if (renderer && typeof renderer.clearHighlight === 'function') {
     renderer.clearHighlight();
   }
@@ -616,6 +768,7 @@ document.addEventListener('DOMContentLoaded', () => {
   elPlayScoreBtn   = $('play-score-btn');
   elStopBtn        = $('stop-btn');
   elRedoBtn        = $('redo-btn');
+  elEditBtn        = $('edit-btn');
   elCopyBtn        = $('copy-btn');
   elClearBtn       = $('clear-btn');
   elLoadBtn        = $('load-btn');
@@ -669,6 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
     elPlayScoreBtn.disabled = true;
     elStopBtn.disabled = true;
     elRedoBtn.disabled = true;
+    elEditBtn.disabled = true;
     elCopyBtn.disabled = true;
     elClearBtn.disabled = true;
     elTapBtn.disabled = true;
@@ -678,6 +832,7 @@ document.addEventListener('DOMContentLoaded', () => {
   elPlayScoreBtn.addEventListener('click', toggleScorePlayback);
   elStopBtn.addEventListener('click', stopSession);
   elRedoBtn.addEventListener('click', redoSession);
+  elEditBtn.addEventListener('click', toggleEditMode);
   elCopyBtn.addEventListener('click', copyABC);
   elTapBtn.addEventListener('click', recordTap);
 
@@ -693,8 +848,34 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   document.addEventListener('keydown', e => {
-    if (e.key !== 'Shift' || e.repeat || app.phase !== 'recording') return;
     if (isTextEntryTarget(e.target)) return;
+
+    // ── Edit mode key handling ──
+    if (app.phase === 'editing' && !e.repeat) {
+      if (EDIT_KEY_BEATS[e.key] !== undefined) {
+        e.preventDefault();
+        assignDuration(EDIT_KEY_BEATS[e.key]);
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        moveCursor(-1);
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        moveCursor(1);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        exitEditMode();
+        return;
+      }
+    }
+
+    // ── Click-track recording key handling ──
+    if (e.key !== 'Shift' || e.repeat || app.phase !== 'recording') return;
     e.preventDefault();
     onNoteKeyDown();
   });

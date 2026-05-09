@@ -231,6 +231,15 @@ header p  { font-size: 0.8rem; color: var(--muted); }
   font-weight: 300;
   border: none;
 }
+/* Manual edit mode: note under the cursor */
+.note-chip.cursor {
+  background: var(--warning);
+  border-color: #f0c040;
+  color: #1a1a2e;
+  transform: scale(1.12);
+  box-shadow: 0 0 10px rgba(224,160,80,0.7);
+}
+.note-chip.cursor .dur-label { color: rgba(26,26,46,0.75); }
 
 /* ── Big TAP button ── */
 .tap-area {
