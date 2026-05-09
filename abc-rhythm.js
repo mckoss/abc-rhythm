@@ -381,18 +381,52 @@ function recordTap() {
 // ---------------------------------------------------------------------------
 // Quantization
 // ---------------------------------------------------------------------------
+const RESOLUTION_MULTIPLIER = {
+  'quarter':       1,
+  'eighth':        2,
+  'sixteenth':     4,
+  'thirty-second': 8,
+};
+
+function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
+  const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
+  const beatMs = 60000 / bpm;
+  const gridMs = beatMs / multiplier;
+
+  if (!ms || ms <= 0 || !bpm || bpm <= 0 || gridMs <= 0) {
+    return allowZero ? null : Quantize.beatsToABC(1 / multiplier);
+  }
+
+  if (allowZero && ms < gridMs) {
+    return null;
+  }
+
+  const steps = Math.max(1, Math.round(ms / gridMs));
+  return Quantize.beatsToABC(steps / multiplier);
+}
+
 function liveQuantize() {
   if (app.holds.length === 0) return;
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
-  // Build tap times from hold starts for grid alignment,
-  // but use hold durations for note length quantization.
-  const holdDurations = app.holds.map(h => h.up - h.down);
-  const durations = holdDurations.map(ms => {
-    const beats = ms / (60000 / bpm);
-    return Quantize.beatsToABC(beats);
+
+  // Holds become note durations. Silences between a keyup and the next keydown
+  // become generated rests when they meet the selected quantization resolution.
+  const durations = app.holds.map(h => {
+    return quantizeMsToABC(h.up - h.down, bpm, s.resolution);
   });
-  state.setAllDurations(durations);
+
+  const restsAfter = app.holds.map(() => null);
+  for (let i = 0; i < app.holds.length - 1; i++) {
+    const gapMs = app.holds[i + 1].down - app.holds[i].up;
+    restsAfter[i] = quantizeMsToABC(gapMs, bpm, s.resolution, { allowZero: true });
+  }
+
+  if (typeof state.setAllDurationsAndInsertedRests === 'function') {
+    state.setAllDurationsAndInsertedRests(durations, restsAfter);
+  } else {
+    state.setAllDurations(durations);
+  }
 }
 
 function finalizeQuantization() {
@@ -421,11 +455,15 @@ function startScorePlayback() {
   const bpm = state.tempo || parseInt(elBpmSlider.value, 10);
   setStatus('Playing score…', 'ready');
 
-  notePlayer.playSequence(state, {
+  const playbackSource = (state.playbackNotes && state.playbackNotes.length)
+    ? state.playbackNotes
+    : state.notes;
+
+  notePlayer.playSequence(playbackSource, {
     bpm,
     unitNoteLength: state.unitNoteLength || 1 / 4,
     onNote: (note) => {
-      if (renderer && typeof renderer.highlightNote === 'function') {
+      if (note.type === 'note' && renderer && typeof renderer.highlightNote === 'function') {
         renderer.highlightNote(note.index);
       }
     },

@@ -289,6 +289,29 @@
       return this._tokens.filter(t => t.type === 'note' || t.type === 'rest').length;
     }
 
+    /**
+     * Notes/rests for playback. Includes generated inter-note rests inserted by
+     * performance quantization, but keeps noteCount/recording indices tied to
+     * the original parsed notes/rests.
+     *
+     * @returns {Array<Object>}
+     */
+    get playbackNotes() {
+      return this._tokens
+        .filter(t => t.type === 'note' || t.type === 'rest' || t.type === 'inserted-rest')
+        .map(t => {
+          if (t.type === 'inserted-rest') {
+            return {
+              type: 'rest',
+              durationABC: t.durationABC,
+              generated: true,
+              afterIndex: t.afterIndex,
+            };
+          }
+          return { ...t };
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Header accessors (always return the initial/header-level value)
     // -------------------------------------------------------------------------
@@ -441,6 +464,7 @@
      * @param {string[]} durationsArray
      */
     setAllDurations(durationsArray) {
+      this._removeInsertedRests();
       const noteTokens = this._tokens.filter(
         t => t.type === 'note' || t.type === 'rest'
       );
@@ -453,10 +477,55 @@
     }
 
     /**
+     * Replace original note/rest durations and insert generated rests after
+     * notes where the performed silence was long enough to quantize.
+     *
+     * The generated rests are serialized in toABC(), rendered in the score, and
+     * included in playbackNotes, but they are intentionally excluded from
+     * noteCount and notes so the recording flow still advances through only the
+     * source notes Mike is performing.
+     *
+     * @param {string[]} durationsArray - durations for original notes/rests
+     * @param {(string|null|undefined)[]} restsAfterArray - rest durations after
+     *   original note/rest i; falsy values mean no rest inserted
+     */
+    setAllDurationsAndInsertedRests(durationsArray, restsAfterArray) {
+      this._removeInsertedRests();
+
+      const noteTokens = this._tokens.filter(
+        t => t.type === 'note' || t.type === 'rest'
+      );
+
+      for (let i = 0; i < noteTokens.length; i++) {
+        if (i < durationsArray.length) {
+          noteTokens[i].durationABC = durationsArray[i];
+        }
+      }
+
+      for (let i = noteTokens.length - 1; i >= 0; i--) {
+        const restDuration = restsAfterArray && restsAfterArray[i];
+        if (restDuration == null) continue;
+
+        const insertAt = this._tokens.indexOf(noteTokens[i]);
+        if (insertAt === -1) continue;
+
+        this._tokens.splice(insertAt + 1, 0, {
+          type: 'inserted-rest',
+          durationABC: restDuration,
+          generated: true,
+          afterIndex: noteTokens[i].index,
+        });
+      }
+
+      this._notify();
+    }
+
+    /**
      * Clear all durations (reset to empty strings).
      * Fires one change event.
      */
     clearDurations() {
+      this._removeInsertedRests();
       for (const tok of this._tokens) {
         if (tok.type === 'note' || tok.type === 'rest') {
           tok.durationABC = '';
@@ -485,6 +554,9 @@
           return tok.accidental + tok.pitch + tok.octave + tok.durationABC;
         }
         if (tok.type === 'rest') {
+          return 'z' + tok.durationABC;
+        }
+        if (tok.type === 'inserted-rest') {
           return 'z' + tok.durationABC;
         }
         // header, text, or field-change — verbatim
@@ -528,6 +600,11 @@
           console.error('MusicState subscriber threw:', e);
         }
       }
+    }
+
+    /** Remove generated rests from the token stream. */
+    _removeInsertedRests() {
+      this._tokens = this._tokens.filter(t => t.type !== 'inserted-rest');
     }
   }
 

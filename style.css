@@ -264,20 +264,29 @@ header p  { font-size: 0.8rem; color: var(--muted); }
 }
 .score-tabs {
   display: flex;
-  gap: 0.3rem;
+  gap: 0;
   margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
 }
 .score-tab {
-  padding: 0.3rem 0.8rem;
-  border-radius: 4px;
+  padding: 0.42rem 0.9rem;
+  margin-bottom: -1px;
+  border-radius: 5px 5px 0 0;
   font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
-  background: var(--surface2);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--border);
   color: var(--muted);
 }
-.score-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.score-tab:not(.active):hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.score-tab.active {
+  background: var(--bg);
+  border-color: var(--border);
+  border-bottom-color: var(--bg);
+  color: var(--accent-hi);
+}
 #score-container { min-height: 120px; }
 
 /* ── Output ABC ── */
