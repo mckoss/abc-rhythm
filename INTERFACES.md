@@ -11,18 +11,15 @@ Each file is a standalone JS module loaded via `<script src="...">` in index.htm
 class ClickTrack {
   constructor()
   // Configure before starting. Can call while stopped.
-  configure({ bpm, beatsPerMeasure, subdivision })
-  // subdivision: 1=beats only, 2=eighth notes, 4=sixteenth notes
+  configure({ bpm, beatsPerMeasure })
 
-  // Start the click track. onTick is called on every subdivision tick.
-  // tickInfo = { beat (0-based), subdiv (0-based within beat),
-  //              isMeasureStart, isBeatStart, audioTime (AudioContext time) }
+  // Start the click track. onTick is called on every quarter-note beat.
+  // tickInfo = { beat (0-based), isMeasureStart, audioTime (AudioContext time) }
   start(onTick)
   stop()
   get isPlaying()  // boolean
   get bpm()
   get beatsPerMeasure()
-  get subdivision()
 }
 
 // Export as window.ClickTrack
@@ -30,8 +27,7 @@ class ClickTrack {
 
 Sound design:
 - Measure downbeat: loud, higher-pitched click (~1000 Hz, 80ms)
-- Beat: medium click (~800 Hz, 60ms)
-- Subdivision: soft tick (~600 Hz, 40ms)
+- Other beats: quieter/shorter click (~800 Hz, 40ms)
 - Use Web Audio API OscillatorNode + GainNode for clean clicks
 - Schedule ahead-of-time (lookahead ~100ms) for timing accuracy
 

@@ -38,7 +38,7 @@ const $ = id => document.getElementById(id);
 let elInputAbc, elOutputAbc, elNoteStrip, elTapBtn, elTransportStatus,
     elStartBtn, elPlayScoreBtn, elStopBtn, elRedoBtn, elCopyBtn, elClearBtn, elLoadBtn,
     elExampleBtn, elBeatDisplay, elBpmSlider, elBpmLabel, elBpmSource,
-    elTimeSigDisplay, elResolution, elCountIn, elSubdivision;
+    elTimeSigDisplay, elResolution, elCountIn;
 
 // ---------------------------------------------------------------------------
 // Settings helpers
@@ -50,7 +50,6 @@ function getSettings() {
     bpm:         parseInt(elBpmSlider.value, 10),
     resolution:  elResolution.value,
     countIn:     parseInt(elCountIn.value, 10),
-    subdivision: parseInt(elSubdivision.value, 10),
   };
 }
 
@@ -230,7 +229,6 @@ function startSession() {
   clickTrack.configure({
     bpm: s.bpm,
     beatsPerMeasure,
-    subdivision: s.subdivision,
   });
 
   clickTrack.start(onTick);
@@ -293,13 +291,9 @@ function redoSession() {
 // ---------------------------------------------------------------------------
 // Click track tick handler
 // ---------------------------------------------------------------------------
-function onTick({ beat, subdiv, isMeasureStart, isBeatStart }) {
-  // Visual beat flash (only on beat starts)
-  if (isBeatStart) {
-    flashBeat(beat);
-  }
-
-  if (!isBeatStart) return; // only process on beats
+function onTick({ beat }) {
+  // Visual beat flash on every beat.
+  flashBeat(beat);
 
   // Count-in phase
   if (app.phase === 'countdown') {
@@ -598,7 +592,6 @@ document.addEventListener('DOMContentLoaded', () => {
   elTimeSigDisplay = $('time-sig-display');
   elResolution     = $('resolution');
   elCountIn        = $('count-in');
-  elSubdivision    = $('subdivision');
 
   // Instantiate modules
   state      = new MusicState();

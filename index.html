@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>abc-rhythm</title>
-  <link rel="stylesheet" href="style.css?v=0.4">
+  <link rel="stylesheet" href="style.css?v=0.5">
   <!-- abcjs for score rendering -->
   <script src="https://cdn.jsdelivr.net/npm/abcjs@6.4.3/dist/abcjs-basic-min.js"></script>
 </head>
 <body>
 
 <header>
-  <h1>abc-rhythm <span class="app-version">v0.4</span></h1>
+  <h1>abc-rhythm <span class="app-version">v0.5</span></h1>
   <p>Hold Shift (or tap) in time to a click track — annotate note durations live.</p>
 </header>
 
@@ -54,15 +54,6 @@
             <option value="0">None</option>
             <option value="1" selected>1 measure</option>
             <option value="2">2 measures</option>
-          </select>
-        </div>
-
-        <div class="field">
-          <label>Subdivision clicks</label>
-          <select id="subdivision">
-            <option value="1" selected>Beats only</option>
-            <option value="2">Eighth notes</option>
-            <option value="4">Sixteenth notes</option>
           </select>
         </div>
 
@@ -129,11 +120,11 @@
 </div><!-- /app -->
 
 <!-- Modules (load order matters) -->
-<script src="music-state.js?v=0.4"></script>
-<script src="click-track.js?v=0.4"></script>
-<script src="note-player.js?v=0.4"></script>
-<script src="quantize.js?v=0.4"></script>
-<script src="renderer.js?v=0.4"></script>
-<script src="abc-rhythm.js?v=0.4"></script>
+<script src="music-state.js?v=0.5"></script>
+<script src="click-track.js?v=0.5"></script>
+<script src="note-player.js?v=0.5"></script>
+<script src="quantize.js?v=0.5"></script>
+<script src="renderer.js?v=0.5"></script>
+<script src="abc-rhythm.js?v=0.5"></script>
 </body>
 </html>
