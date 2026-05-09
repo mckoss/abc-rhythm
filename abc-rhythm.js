@@ -407,35 +407,33 @@ function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
   return Quantize.beatsToABC(steps / multiplier);
 }
 
-function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
+function quantizeHeldMsToABC(ms, bpm, resolution) {
   const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
   const beatMs = 60000 / bpm;
   const gridMs = beatMs / multiplier;
 
-  if (!holds.length || !bpm || bpm <= 0 || !startTime || gridMs <= 0) {
-    return {
-      durations: holds.map(h => quantizeMsToABC(h.up - h.down, bpm, resolution)),
-      restsAfter: holds.map(() => null),
-    };
+  if (!ms || ms <= 0 || !bpm || bpm <= 0 || gridMs <= 0) {
+    return Quantize.beatsToABC(1 / multiplier);
   }
 
-  const toStep = (time) => Math.max(0, Math.round((time - startTime) / gridMs));
+  // For held-note recording, err slightly long rather than short. Human key
+  // releases often land just before the next click/grid boundary; treating a
+  // near-quarter hold as an eighth feels much worse than rounding it up.
+  const UNDERSHOOT_TOLERANCE_STEPS = 0.35;
+  const steps = Math.max(1, Math.ceil((ms / gridMs) - UNDERSHOOT_TOLERANCE_STEPS));
+  return Quantize.beatsToABC(steps / multiplier);
+}
 
-  const quantized = holds.map(h => {
-    const downStep = toStep(h.down);
-    let upStep = toStep(h.up);
-    if (upStep <= downStep) upStep = downStep + 1;
-    return { downStep, upStep };
-  });
-
-  const durations = quantized.map(q => Quantize.beatsToABC((q.upStep - q.downStep) / multiplier));
+function quantizeHoldsToGrid(holds, bpm, resolution) {
+  const durations = holds.map(h => quantizeHeldMsToABC(h.up - h.down, bpm, resolution));
   const restsAfter = holds.map(() => null);
 
-  for (let i = 0; i < quantized.length - 1; i++) {
-    const gapSteps = quantized[i + 1].downStep - quantized[i].upStep;
-    if (gapSteps > 0) {
-      restsAfter[i] = Quantize.beatsToABC(gapSteps / multiplier);
-    }
+  // Rests are generated from actual silence between held notes. Keep these
+  // neutral: short gaps below the selected resolution disappear; longer gaps
+  // round to the nearest rest duration.
+  for (let i = 0; i < holds.length - 1; i++) {
+    const gapMs = holds[i + 1].down - holds[i].up;
+    restsAfter[i] = quantizeMsToABC(gapMs, bpm, resolution, { allowZero: true });
   }
 
   return { durations, restsAfter };
@@ -446,11 +444,9 @@ function liveQuantize() {
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
 
-  // Quantize keydown/keyup boundaries to the click grid, then subtract grid
-  // positions. This matches musical intent better than quantizing raw hold ms:
-  // a key pressed just after one click and released just before the next is a
-  // quarter note, not a short eighth.
-  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution, app.recordingStartTime);
+  // Quantize actual hold lengths, biased slightly upward so near-boundary key
+  // releases do not turn intended quarter notes into eighth notes.
+  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution);
 
   if (typeof state.setAllDurationsAndInsertedRests === 'function') {
     state.setAllDurationsAndInsertedRests(durations, restsAfter);
