@@ -217,11 +217,13 @@ function startSession() {
   const beatsPerMeasure = parseTimeSig(s.timeSig);
   const totalCountInBeats = s.countIn * beatsPerMeasure;
 
-  // Reset tap state
-  app.tapTimes = [];
+  // Reset recording state
+  app.holds = [];
   app.currentNoteIdx = 0;
   app.countInBeatsLeft = totalCountInBeats;
-  app.recordingStartTime = 0;
+  // If there is no count-in, align the recording grid with the first scheduled click.
+  // ClickTrack starts its first tick ~50ms in the future.
+  app.recordingStartTime = totalCountInBeats > 0 ? 0 : Date.now() + 50;
   app.phase = totalCountInBeats > 0 ? 'countdown' : 'recording';
 
   // Configure and start click track
@@ -405,22 +407,50 @@ function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
   return Quantize.beatsToABC(steps / multiplier);
 }
 
+function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
+  const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
+  const beatMs = 60000 / bpm;
+  const gridMs = beatMs / multiplier;
+
+  if (!holds.length || !bpm || bpm <= 0 || !startTime || gridMs <= 0) {
+    return {
+      durations: holds.map(h => quantizeMsToABC(h.up - h.down, bpm, resolution)),
+      restsAfter: holds.map(() => null),
+    };
+  }
+
+  const toStep = (time) => Math.max(0, Math.round((time - startTime) / gridMs));
+
+  const quantized = holds.map(h => {
+    const downStep = toStep(h.down);
+    let upStep = toStep(h.up);
+    if (upStep <= downStep) upStep = downStep + 1;
+    return { downStep, upStep };
+  });
+
+  const durations = quantized.map(q => Quantize.beatsToABC((q.upStep - q.downStep) / multiplier));
+  const restsAfter = holds.map(() => null);
+
+  for (let i = 0; i < quantized.length - 1; i++) {
+    const gapSteps = quantized[i + 1].downStep - quantized[i].upStep;
+    if (gapSteps > 0) {
+      restsAfter[i] = Quantize.beatsToABC(gapSteps / multiplier);
+    }
+  }
+
+  return { durations, restsAfter };
+}
+
 function liveQuantize() {
   if (app.holds.length === 0) return;
   const s = getSettings();
   const bpm = parseInt(elBpmSlider.value, 10);
 
-  // Holds become note durations. Silences between a keyup and the next keydown
-  // become generated rests when they meet the selected quantization resolution.
-  const durations = app.holds.map(h => {
-    return quantizeMsToABC(h.up - h.down, bpm, s.resolution);
-  });
-
-  const restsAfter = app.holds.map(() => null);
-  for (let i = 0; i < app.holds.length - 1; i++) {
-    const gapMs = app.holds[i + 1].down - app.holds[i].up;
-    restsAfter[i] = quantizeMsToABC(gapMs, bpm, s.resolution, { allowZero: true });
-  }
+  // Quantize keydown/keyup boundaries to the click grid, then subtract grid
+  // positions. This matches musical intent better than quantizing raw hold ms:
+  // a key pressed just after one click and released just before the next is a
+  // quarter note, not a short eighth.
+  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution, app.recordingStartTime);
 
   if (typeof state.setAllDurationsAndInsertedRests === 'function') {
     state.setAllDurationsAndInsertedRests(durations, restsAfter);
