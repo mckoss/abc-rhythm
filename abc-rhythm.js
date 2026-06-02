@@ -413,7 +413,7 @@ function quantizeMsToABC(ms, bpm, resolution, { allowZero = false } = {}) {
   return Quantize.beatsToABC(steps / multiplier);
 }
 
-function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
+function quantizeHoldsToGrid(holds, bpm, resolution, startTime, beatsPerMeasure) {
   const multiplier = RESOLUTION_MULTIPLIER[resolution] || 2;
   const beatMs = 60000 / bpm;
   const gridMs = beatMs / multiplier;
@@ -433,6 +433,15 @@ function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
   const RELEASE_LENIENCY_STEPS = 0.5;
   const snapReleaseStep = (time) => Math.max(0, Math.round(rawStep(time) + RELEASE_LENIENCY_STEPS));
 
+  // Inter-onset bias: a note owns the time until the next onset — an early
+  // release is treated as articulation (breath/swing lift), not an intended
+  // rest. A rest is only emitted when the note was released within the first
+  // FILL_FRACTION of the interval AND the leftover silence is at least
+  // MIN_REST_BEATS long (a real, audible pause).
+  const FILL_FRACTION = 0.5;
+  const MIN_REST_BEATS = 1;
+  const stepsPerMeasure = (beatsPerMeasure || 4) * multiplier;
+
   const starts = holds.map(h => snapStartStep(h.down));
   for (let i = 1; i < starts.length; i++) {
     if (starts[i] <= starts[i - 1]) starts[i] = starts[i - 1] + 1;
@@ -447,16 +456,35 @@ function quantizeHoldsToGrid(holds, bpm, resolution, startTime) {
     let releaseStep = Math.max(startStep + 1, snapReleaseStep(holds[i].up));
 
     if (nextStartStep != null) {
-      // If the release is close enough to the next note start, treat it as
-      // normal articulation and extend the note to that next onset. If it is
-      // clearly earlier, keep the shorter note and emit a rest for the gap.
       releaseStep = Math.min(releaseStep, nextStartStep);
-      const endStep = releaseStep;
-      const restSteps = nextStartStep - endStep;
-      durations.push(Quantize.beatsToABC(Math.max(1, endStep - startStep) / multiplier));
-      if (restSteps > 0) restsAfter[i] = Quantize.beatsToABC(restSteps / multiplier);
+      const ioiSteps = nextStartStep - startStep;          // onset-to-onset span
+      const heldSteps = Math.max(1, releaseStep - startStep);
+      const gapSteps = ioiSteps - heldSteps;
+
+      // Fold an early release into the note (the note owns the inter-onset
+      // interval) unless it was clearly short AND followed by a real pause.
+      const releasedEarly = heldSteps < FILL_FRACTION * ioiSteps;
+      const restIsSubstantial = gapSteps >= MIN_REST_BEATS * multiplier;
+
+      if (gapSteps > 0 && releasedEarly && restIsSubstantial) {
+        durations.push(Quantize.beatsToABC(heldSteps / multiplier));
+        restsAfter[i] = Quantize.beatsToABC(gapSteps / multiplier);
+      } else {
+        durations.push(Quantize.beatsToABC(ioiSteps / multiplier));
+      }
     } else {
-      durations.push(Quantize.beatsToABC(Math.max(1, releaseStep - startStep) / multiplier));
+      // Terminal note: there is no next onset to fill to, so complete its
+      // final measure. If held long enough it fills to the bar line; if it was
+      // a genuinely short (staccato) final note, keep it short and pad the rest
+      // of the measure with a terminal rest so the last bar is always full.
+      let boundaryStep = (Math.floor(startStep / stepsPerMeasure) + 1) * stepsPerMeasure;
+      while (boundaryStep < releaseStep) boundaryStep += stepsPerMeasure;
+      const toBoundary = boundaryStep - startStep;
+      const heldSteps = Math.max(1, releaseStep - startStep);
+      const endSteps = heldSteps >= FILL_FRACTION * toBoundary ? toBoundary : heldSteps;
+      durations.push(Quantize.beatsToABC(endSteps / multiplier));
+      const restSteps = toBoundary - endSteps;
+      if (restSteps > 0) restsAfter[i] = Quantize.beatsToABC(restSteps / multiplier);
     }
   }
 
@@ -471,7 +499,8 @@ function liveQuantize() {
   // Quantize note starts to the click grid and derive durations from snapped
   // starts. Releases get extra leniency because they are articulation, not the
   // primary rhythmic event.
-  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution, app.recordingStartTime);
+  const beatsPerMeasure = parseTimeSig(s.timeSig);
+  const { durations, restsAfter } = quantizeHoldsToGrid(app.holds, bpm, s.resolution, app.recordingStartTime, beatsPerMeasure);
 
   if (typeof state.setAllDurationsAndInsertedRests === 'function') {
     state.setAllDurationsAndInsertedRests(durations, restsAfter);

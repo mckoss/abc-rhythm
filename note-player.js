@@ -92,6 +92,14 @@ class NotePlayer {
     const bpm = Number(opts.bpm || (source && source.tempo) || 120);
     const startDelayMs = opts.startDelayMs == null ? 30 : Number(opts.startDelayMs);
 
+    // Articulation gap — humanize playback by sounding each note slightly
+    // shorter than its slot (detaché). Onset timing is unchanged. Tunable:
+    //   gapFraction — fraction of the note clipped (default 15%)
+    //   maxGapMs    — cap so long notes aren't over-clipped
+    const gapFraction = opts.gapFraction == null ? 0.15 : Number(opts.gapFraction);
+    const maxGapMs = opts.maxGapMs == null ? 90 : Number(opts.maxGapMs);
+    const MIN_SOUND_MS = 40;
+
     if (!notes.length || !bpm || bpm <= 0) {
       return { durationMs: 0, noteCount: 0 };
     }
@@ -108,13 +116,18 @@ class NotePlayer {
       const noteBpm = context?.tempo || bpm;
       const durationMs = this._durationABCToMs(note.durationABC || '', noteBpm, unitNoteLength);
 
+      // Sound the note slightly shorter than its slot; `when` still advances by
+      // the full durationMs below, so onsets stay exactly on the beat.
+      const gapMs = Math.min(maxGapMs, durationMs * gapFraction);
+      const soundMs = Math.max(MIN_SOUND_MS, durationMs - gapMs);
+
       if (note.type === 'note') {
         this._scheduleNote(
           note.pitch,
           note.accidental || '',
           note.octave || '',
           when,
-          durationMs,
+          soundMs,
         );
       }
 
