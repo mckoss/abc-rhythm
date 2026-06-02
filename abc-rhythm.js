@@ -536,6 +536,28 @@ function moveCursor(delta) {
 }
 
 /**
+ * Click a note/rest chip in the sequence strip to select it for editing.
+ * Outside edit mode this also enters edit mode (jumping straight to the
+ * clicked note); bar lines and clicks during recording are ignored.
+ */
+function onNoteStripClick(e) {
+  const chip = e.target.closest && e.target.closest('.note-chip');
+  if (!chip || chip.classList.contains('bar')) return;
+  const m = /^chip-(\d+)$/.exec(chip.id || '');
+  if (!m) return;
+  const noteIndex = parseInt(m[1], 10);
+  if (!state || !state.notes.some(n => n.index === noteIndex)) return;
+
+  if (app.phase === 'loaded' || app.phase === 'reviewing') {
+    enterEditMode();            // flips phase + UI; we override the cursor below
+  } else if (app.phase !== 'editing') {
+    return;                     // recording / idle: ignore clicks
+  }
+  app.editCursor = noteIndex;
+  updateEditCursorUI();
+}
+
+/**
  * Assign an ABC duration to the note at the current edit cursor,
  * play it as audio feedback, then advance the cursor.
  */
@@ -799,6 +821,7 @@ function init() {
   elEditBtn.addEventListener('click', toggleEditMode);
   elCopyBtn.addEventListener('click', copyABC);
   elTapBtn.addEventListener('click', recordTap);
+  elNoteStrip.addEventListener('click', onNoteStripClick);
 
   // Shift key hold timing. Mouse/touch still uses the tap button toggle.
   const isTextEntryTarget = (target) => {

@@ -199,7 +199,7 @@ header p  { font-size: 0.8rem; color: var(--muted); }
   font-weight: 700;
   color: var(--text);
   transition: all 0.08s ease;
-  cursor: default;
+  cursor: pointer;
   user-select: none;
   padding: 0 4px;
   position: relative;
@@ -223,6 +223,10 @@ header p  { font-size: 0.8rem; color: var(--muted); }
 .note-chip.done { background: var(--note-done); color: #666; }
 .note-chip.done .dur-label { color: #555; }
 .note-chip.rest { color: var(--muted); font-style: italic; }
+/* Hover affordance for the clickable note/rest chips (bar lines excluded). */
+.note-chip:not(.bar):not(.cursor):not(.active):hover {
+  border-color: var(--accent-hi);
+}
 .note-chip.bar {
   background: transparent;
   color: var(--border);
@@ -230,6 +234,7 @@ header p  { font-size: 0.8rem; color: var(--muted); }
   font-size: 1.1rem;
   font-weight: 300;
   border: none;
+  cursor: default;
 }
 /* Manual edit mode: note under the cursor */
 .note-chip.cursor {
