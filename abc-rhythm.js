@@ -422,21 +422,54 @@ function finalizeQuantization() {
 // ---------------------------------------------------------------------------
 
 /**
- * Number-key → quarter-note beat count mapping.
- * 1=quarter, 2=half, 3=dotted-half, 4=whole, 8=eighth, 6=sixteenth, 5=thirty-second
+ * Number-key → quarter-note beat count mapping (the *base*, undotted unit).
+ * Hold Shift while pressing a key to dot the value (× 1.5), e.g.
+ * Shift+1 = dotted quarter, Shift+2 = dotted half, Shift+8 = dotted eighth.
+ * 1=quarter, 2=half, 4=whole, 8=eighth, 6=sixteenth, 5=thirty-second
  */
 const EDIT_KEY_BEATS = {
   '1': 1,
   '2': 2,
-  '3': 3,
   '4': 4,
   '8': 0.5,
   '6': 0.25,
   '5': 0.125,
 };
 
+/** Multiplier applied when a duration key is pressed with Shift held (dotted note). */
+const DOT_MULTIPLIER = 1.5;
+
+/**
+ * Exact beats → ABC duration for every value reachable in edit mode (base units
+ * and their dotted forms). Edit-mode assignments are explicit choices, so they
+ * map exactly rather than through Quantize.beatsToABC's bounded snap table
+ * (which tops out at a whole note and would mis-round e.g. a dotted whole).
+ * All keys are exact dyadic floats, so Map lookups are reliable.
+ */
+const EDIT_ABC_BY_BEATS = new Map([
+  [1, ''], [2, '2'], [4, '4'], [0.5, '/'], [0.25, '/4'], [0.125, '/8'],
+  [1.5, '3/2'], [3, '3'], [6, '6'], [0.75, '3/4'], [0.375, '3/8'], [0.1875, '3/16'],
+]);
+
+/** Beats → ABC for an edit-mode assignment: exact when known, snap otherwise. */
+function editDurationABC(beats) {
+  return EDIT_ABC_BY_BEATS.has(beats)
+    ? EDIT_ABC_BY_BEATS.get(beats)
+    : Quantize.beatsToABC(beats);
+}
+
+/**
+ * Read the physical digit from a keydown event, independent of Shift
+ * (Shift+1 reports e.key === '!', but e.code stays 'Digit1').
+ * Returns the digit character, or null if the key isn't a number key.
+ */
+function editDigitFromEvent(e) {
+  const m = /^(?:Digit|Numpad)(\d)$/.exec(e.code || '');
+  return m ? m[1] : null;
+}
+
 /** Human-readable label for edit-mode duration keys. */
-const EDIT_KEY_LEGEND = '1=quarter 2=half 3=dotted-half 4=whole 8=eighth 6=16th 5=32nd';
+const EDIT_KEY_LEGEND = '1=quarter 2=half 4=whole 8=eighth 6=16th 5=32nd  Shift=dotted';
 
 function enterEditMode() {
   if (state.noteCount === 0) return;
@@ -507,7 +540,7 @@ function moveCursor(delta) {
  * play it as audio feedback, then advance the cursor.
  */
 function assignDuration(beats) {
-  const abcDur = Quantize.beatsToABC(beats);
+  const abcDur = editDurationABC(beats);
   state.setDuration(app.editCursor, abcDur);  // triggers onStateChange (score re-render)
 
   // Audio feedback
@@ -783,9 +816,11 @@ function init() {
 
     // ── Edit mode key handling ──
     if (app.phase === 'editing' && !e.repeat) {
-      if (EDIT_KEY_BEATS[e.key] !== undefined) {
+      const digit = editDigitFromEvent(e);
+      if (digit !== null && EDIT_KEY_BEATS[digit] !== undefined) {
         e.preventDefault();
-        assignDuration(EDIT_KEY_BEATS[e.key]);
+        const base = EDIT_KEY_BEATS[digit];
+        assignDuration(e.shiftKey ? base * DOT_MULTIPLIER : base);
         return;
       }
       if (e.key === 'ArrowLeft') {
@@ -825,4 +860,4 @@ function init() {
 }
 
 // Expose the explicit entry point; index.html calls AbcRhythm.init().
-window.AbcRhythm = { init };
+window.AbcRhythm = { init, EDIT_KEY_BEATS, DOT_MULTIPLIER, editDurationABC };
