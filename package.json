@@ -1,0 +1,9 @@
+{
+  "name": "abc-rhythm",
+  "version": "1.4.0",
+  "description": "Tap the spacebar in rhythm to annotate note durations in ABC notation",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

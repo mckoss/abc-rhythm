@@ -686,9 +686,10 @@ K:C
 CCGG AAG FFEE DDC|GGFF EED GGFF EED|CCGG AAG FFEE DDC|]`;
 
 // ---------------------------------------------------------------------------
-// Init
+// Init — called explicitly from index.html once the DOM is ready. Loading this
+// module has no side effects; the caller owns the wiring.
 // ---------------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
+function init() {
   elInputAbc       = $('input-abc');
   elOutputAbc      = $('output-abc');
   elNoteStrip      = $('note-strip');
@@ -821,4 +822,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   buildBeatDots(4);
   setStatus('Load ABC to begin.', '');
-});
+}
+
+// Expose the explicit entry point; index.html calls AbcRhythm.init().
+window.AbcRhythm = { init };

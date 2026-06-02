@@ -128,5 +128,12 @@
 <script src="quantize-holds.js?v=1.4.0"></script>
 <script src="renderer.js?v=1.4.0"></script>
 <script src="abc-rhythm.js?v=1.4.0"></script>
+
+<!-- Explicit app start: modules above only define; the page owns the wiring. -->
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    window.AbcRhythm.init();
+  });
+</script>
 </body>
 </html>
