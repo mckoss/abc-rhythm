@@ -436,7 +436,7 @@ const EDIT_KEY_BEATS = {
 };
 
 /** Human-readable label for edit-mode duration keys. */
-const EDIT_KEY_LEGEND = '1=♩ 2=𝅗 3=𝅗. 4=𝅝 8=♪ 6=16th 5=32nd';
+const EDIT_KEY_LEGEND = '1=quarter 2=half 3=dotted-half 4=whole 8=eighth 6=16th 5=32nd';
 
 function enterEditMode() {
   if (state.noteCount === 0) return;
